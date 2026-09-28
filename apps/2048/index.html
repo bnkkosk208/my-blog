@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>2048</title>
+  <meta name="description" content="같은 숫자 타일을 밀어 합쳐 2048을 만드는 퍼즐 게임">
+  <script>
+    // 블로그에 저장된 테마를 먼저 반영해 깜빡임을 줄인다
+    try {
+      const savedTheme = localStorage.getItem('theme');
+      if (savedTheme === 'light' || savedTheme === 'dark') {
+        document.documentElement.setAttribute('data-theme', savedTheme);
+      }
+    } catch (e) {
+      // 저장소 접근 불가 시 시스템 설정만 따른다
+    }
+  </script>
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./main.js"></script>
+</head>
+<body>
+  <main class="app">
+    <header class="top">
+      <h1 class="title">2048</h1>
+      <div class="scores">
+        <div class="score-box" id="score-box">
+          <span class="score-label">점수</span>
+          <span class="score-value" id="score">0</span>
+        </div>
+        <div class="score-box">
+          <span class="score-label">최고</span>
+          <span class="score-value" id="best">0</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="bar">
+      <p class="desc">같은 숫자를 합쳐 2048을 만드세요</p>
+      <div class="actions">
+        <button type="button" class="btn btn-secondary" id="undo-btn" disabled>되돌리기</button>
+        <button type="button" class="btn btn-primary" id="new-btn">새 게임</button>
+      </div>
+    </div>
+
+    <div class="board" id="board" role="application" tabindex="0"
+         aria-label="2048 게임 보드. 방향키나 WASD로 타일을 이동하세요" aria-describedby="help">
+      <div class="grid" aria-hidden="true">
+        <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+        <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+        <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+        <div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+      </div>
+      <div class="tiles" id="tiles" aria-hidden="true"></div>
+
+      <div class="overlay" id="overlay" role="dialog" aria-modal="true" aria-labelledby="overlay-title" aria-describedby="overlay-text" hidden>
+        <p class="overlay-title" id="overlay-title"></p>
+        <p class="overlay-text" id="overlay-text"></p>
+        <div class="overlay-actions" id="win-actions" hidden>
+          <button type="button" class="btn btn-primary" id="continue-btn">계속하기</button>
+          <button type="button" class="btn btn-secondary" id="win-new-btn">새 게임</button>
+        </div>
+        <div class="overlay-actions" id="over-actions" hidden>
+          <button type="button" class="btn btn-primary" id="retry-btn">다시 하기</button>
+          <button type="button" class="btn btn-secondary" id="over-undo-btn">되돌리기</button>
+        </div>
+      </div>
+    </div>
+
+    <p class="help" id="help">방향키·WASD 또는 보드 스와이프로 이동합니다. 블로그 화면 안에서는 보드를 한 번 누른 뒤 키를 쓰세요.</p>
+    <div class="sr-only" id="live" aria-live="polite"></div>
+  </main>
+</body>
+</html>

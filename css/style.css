@@ -216,6 +216,69 @@ main {
   color: var(--text-muted);
 }
 
+.home-section {
+  margin-top: var(--space-4);
+}
+
+.section-title {
+  margin: 0 0 var(--space-2);
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.app-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.app-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+  overflow: hidden;
+}
+
+.app-card-body {
+  padding: var(--space-3) var(--space-3) var(--space-2);
+}
+
+.app-card-title {
+  margin: 0;
+  font-size: 1.25rem;
+  line-height: 1.45;
+}
+
+.app-card-desc {
+  margin: var(--space-1) 0 0;
+  color: var(--text-muted);
+  font-size: 0.925rem;
+}
+
+.app-frame {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.app-frame iframe {
+  display: block;
+  width: 100%;
+  border: 0;
+}
+
+.app-card-link {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  font-size: 0.925rem;
+  text-decoration: none;
+}
+
 .post-list {
   list-style: none;
   margin: 0;

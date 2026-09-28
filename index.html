@@ -32,9 +32,28 @@
       <p>생각과 배움을 차분히 적어 둡니다.</p>
     </section>
 
-    <ul id="post-list" class="post-list" aria-live="polite">
-      <li class="status">글을 불러오는 중…</li>
-    </ul>
+    <section class="home-section" aria-labelledby="apps-heading">
+      <h2 id="apps-heading" class="section-title">웹앱</h2>
+      <ul class="app-list">
+        <li class="app-card">
+          <div class="app-card-body">
+            <h3 class="app-card-title">2048</h3>
+            <p class="app-card-desc">같은 숫자 타일을 밀어 합쳐 2048을 만드는 퍼즐 게임. 방향키·WASD·스와이프로 플레이하세요.</p>
+          </div>
+          <div class="app-frame">
+            <iframe src="apps/2048/" title="2048 게임" loading="lazy" height="560"></iframe>
+          </div>
+          <a class="app-card-link" href="apps/2048/" target="_blank" rel="noopener">새 창에서 크게 하기 →</a>
+        </li>
+      </ul>
+    </section>
+
+    <section class="home-section" aria-labelledby="posts-heading">
+      <h2 id="posts-heading" class="section-title">글</h2>
+      <ul id="post-list" class="post-list" aria-live="polite">
+        <li class="status">글을 불러오는 중…</li>
+      </ul>
+    </section>
   </main>
 
   <footer class="site-footer">
