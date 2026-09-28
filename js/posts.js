@@ -46,7 +46,11 @@ export async function getPostList() {
       }),
   );
 
-  return posts.filter(Boolean).sort((a, b) => b.date.localeCompare(a.date));
+  // 날짜 최신순, 같은 날짜면 index.json에 나중에 추가한 글이 먼저
+  return posts
+    .map((post, order) => post && { ...post, order })
+    .filter(Boolean)
+    .sort((a, b) => b.date.localeCompare(a.date) || b.order - a.order);
 }
 
 export async function getPost(slug) {
