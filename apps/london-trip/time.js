@@ -1,5 +1,6 @@
 /* london-trip — 시간 유틸 (순수 함수, DOM 접근 없음)
  * 모든 비교는 런던 현지 시각(Europe/London) 기준. 기기 시간대와 무관.
+ * toEpoch/format은 알림·.ics용(시간대 지정 가능).
  * 테스트: 개발자 도구에서 TripTime.now = function () { return new Date('2026-10-18T15:10:00Z'); } */
 (function () {
   'use strict';
@@ -97,8 +98,73 @@
     return { current: current, next: next };
   }
 
+  // ---------- 시간대 → UTC epoch (알림·.ics용) ----------
+  // Intl 미지원 시 고정 오프셋(분): 2026년 영국 서머타임 종료가 10/25라 여행 기간 전체가 BST(UTC+1), 서울 UTC+9
+  var FIXED_OFFSET = { 'Europe/London': 60, 'Asia/Seoul': 540 };
+  var tzFmts = {};
+  function tzFmt(tz) {
+    if (tzFmts[tz] !== undefined) return tzFmts[tz];
+    var f = null;
+    try {
+      f = new Intl.DateTimeFormat('en-GB', {
+        timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+      });
+      if (f.resolvedOptions().timeZone !== tz) f = null;
+    } catch (e) {
+      f = null;
+    }
+    tzFmts[tz] = f;
+    return f;
+  }
+  /** epoch ms → 그 시간대의 {y,mo,d,h,mi,s} */
+  function wallParts(ms, tz) {
+    var f = tzFmt(tz);
+    if (!f) {
+      var off = FIXED_OFFSET[tz] || 0;
+      var d = new Date(ms + off * 60000);
+      return { y: d.getUTCFullYear(), mo: d.getUTCMonth() + 1, d: d.getUTCDate(), h: d.getUTCHours(), mi: d.getUTCMinutes(), s: d.getUTCSeconds() };
+    }
+    var p = {};
+    f.formatToParts(new Date(ms)).forEach(function (x) { p[x.type] = x.value; });
+    return { y: +p.year, mo: +p.month, d: +p.day, h: +p.hour % 24, mi: +p.minute, s: +p.second };
+  }
+  /** 해당 시각(ms)에서 tz의 UTC 오프셋(ms) */
+  function offsetAt(ms, tz) {
+    var w = wallParts(ms, tz);
+    return Date.UTC(w.y, w.mo - 1, w.d, w.h, w.mi, w.s) - Math.floor(ms / 1000) * 1000;
+  }
+  /**
+   * 'YYYY-MM-DD' + 'HH:MM'(tz 현지 시각) → UTC epoch ms. 형식이 틀리면 null.
+   * 기기 시간대와 무관하다.
+   */
+  function toEpoch(dateISO, hhmm, tz) {
+    if (!isISODate(dateISO)) return null;
+    var min = toMin(hhmm);
+    if (min === null) return null;
+    tz = tz || TZ;
+    var p = dateISO.split('-');
+    var guess = Date.UTC(+p[0], +p[1] - 1, +p[2], Math.floor(min / 60), min % 60);
+    var off1 = offsetAt(guess, tz);
+    var t = guess - off1;
+    var off2 = offsetAt(t, tz);
+    if (off2 !== off1) t = guess - off2; // 서머타임 경계 보정
+    return t;
+  }
+  /** epoch ms → tz 현지 {date:'YYYY-MM-DD', hhmm:'HH:MM', md:'10/18'} */
+  function format(ms, tz) {
+    var w = wallParts(ms, tz || TZ);
+    return {
+      date: w.y + '-' + pad(w.mo) + '-' + pad(w.d),
+      hhmm: pad(w.h) + ':' + pad(w.mi),
+      md: w.mo + '/' + w.d,
+    };
+  }
+
   var api = {
     TZ: TZ,
+    toEpoch: toEpoch,
+    format: format,
     supported: !!partsFmt,
     /** 현재 시각. 테스트를 위해 덮어쓸 수 있다. */
     now: function () { return new Date(); },

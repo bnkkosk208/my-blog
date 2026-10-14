@@ -357,3 +357,108 @@ apps/london-trip/
 - **D2 → source-dump.txt 커밋 안 함.** `apps/london-trip/.gitignore`에 `docs/source-dump.txt`를 넣는다.
 - **D3 → 기본안대로** 공개 유지 + 뮤지컬 탭에 "일정표상 관람일 10/20(화)" 주석 박스.
 - **D4 → S1·S2 모두 포함.**
+
+## 13. 알림 기능 (v2)
+사용자 요구: "일정 항목으로 푸시 알림 기능 넣어줘" — 항목별로 시작 N분 전에 알린다. 1~12장은 그대로 두고, 바뀌는 규칙은 아래에 "x.x를 대체/보완"으로 적는다.
+
+### 13.1 확정 방식과 방식별 제약 (사용자 확정, 2026-10-14)
+**브라우저 알림(Notification API) + 앱 내 토스트 + 캘린더 내보내기(.ics, VALARM)** 조합. 서버 푸시는 범위 밖.
+- 앱이 열려 있을 때: 시스템 알림(권한 허용 시) + 항상 앱 내 토스트(권한 거부·미지원·iframe이면 토스트만).
+- 앱이 닫혀 있을 때: 미리 .ics를 휴대폰 캘린더에 넣어 두면 OS가 알린다(닫힌 상태에서 확실한 유일한 방법).
+
+| 방식 | Android Chrome | iOS Safari | 데스크톱 브라우저 | 블로그 iframe 안 |
+|---|---|---|---|---|
+| 앱 내 토스트(+진동·소리) | 화면에 떠 있을 때만. `vibrate` 지원 | 화면에 떠 있을 때만. `vibrate` 미지원 | 탭이 열려 있으면 동작(백그라운드 탭은 타이머가 최대 1분 단위로 지연) | 동작 |
+| Notification API | `new Notification()` 불가(Illegal constructor). **Service Worker의 `showNotification`만 가능**(A4). 브라우저가 백그라운드에서 멈추면 안 울림 | 일반 탭은 미지원. 홈 화면에 추가한 웹앱(16.4+, manifest 필요)에서만 → 이번 범위에서는 토스트만 | `new Notification()` 동작. 권한은 사용자 클릭 때만 요청 | 권한 요청이 막히거나 제한됨 → 요청하지 않고 "새 창에서 열면 시스템 알림 사용 가능" 안내 |
+| .ics(VALARM) | 파일을 캘린더 앱으로 열기. Google Calendar 앱은 .ics 직접 가져오기가 안 되는 기기가 있음(삼성 캘린더 등은 가능, 아니면 PC의 calendar.google.com 가져오기). VALARM 대신 앱 기본 알림이 쓰일 수 있음 | 다운로드하면 "캘린더에 추가" 시트(여러 일정 "모두 추가"). VALARM 반영 | OS 캘린더(Outlook/Apple 캘린더)로 가져오기 | 같은 오리진이라 다운로드 동작 |
+| (참고) SW + Push / Notification Triggers | Push는 푸시 서버·VAPID 키가 필요해 정적 사이트로 불가. Notification Triggers(`showTrigger`)는 Chrome 실험이 중단되어 표준이 아님 → 범위 밖 | | | |
+
+### 13.2 알림 설정 UI
+- **카드 벨 버튼**: 각 카드 우측(체크박스 옆) `<button aria-pressed>` 44×44px, 라벨 `"알림 켜기: {제목}"`. 켜지면 채운 벨 + 시간 옆에 `🔔 30분 전` 텍스트 배지(색 외 구분). 시작시간이 없는 행(r66, 시작 없는 사용자 일정)은 벨 `disabled`(title "시작 시간이 없어 알림 불가").
+- **항목별 시점**: 펼친 영역에 `알림 시점` `<select>`(5/10/15/30/60/90/120분 전, 기본 = 전역 기본값). 바꾸면 그 항목을 다시 예약.
+- **알림 패널**: 일정 뷰 일자 요약 카드 바로 아래 `<details class="alarm-panel">`(기본 접힘). summary 줄에 `🔔 다음 알림 10/18 16:00 · 런던아이 탑승 (30분 전)` 또는 `알림 꺼짐`. 펼치면:
+  1. 전역 `알림 사용` 스위치 — 끄면 아무것도 울리지 않음(항목 설정은 유지, 벨은 흐리게).
+  2. 시스템 알림 상태: `허용됨` / `거부됨(브라우저 설정에서 변경)` / `미지원(앱 안 알림만)` / `iframe 안: 새 창에서 열기 ↗` / `[시스템 알림 허용]` 버튼(클릭 때만 `requestPermission`).
+  3. 기본 알림 시점 select, `소리` 체크(기본 끔), `진동` 체크(지원 기기만 표시).
+  4. 일괄 버튼: `예약필요 항목 켜기`, `이동 항목 켜기`(이동/활동 r57 포함), `이 날 모두 켜기`, `모두 끄기`(confirm). 결과를 기존 aria-live로 "알림 7개를 켰습니다" 안내.
+  5. `다가오는 알림`: 지금 이후 최대 5개(날짜·알림 시각·제목·N분 전). 누르면 그 날 탭으로 이동해 카드 펼침. 15분 이내 놓친 알림은 `놓침` 배지로 맨 위.
+  6. `캘린더로 내보내기(.ics)`: 범위 라디오 `알림 켠 항목(전 일정)`(기본) / `이 날 전체` / `여행 전체`, `내 일정 포함`(기본 켬), `[.ics 받기]`. 아래 기기별 1줄 안내(iOS·Android·PC).
+- **토스트**: 화면 하단 고정(`env(safe-area-inset-bottom)`, 최대 폭 560px). `16:00 런던아이 탑승 · 30분 후 시작` + `[보기]`(카드로 스크롤·펼침) + `[닫기]`(각 44px). 같은 시각 여러 개는 한 토스트에 최대 3개 + "외 n개". 자동으로 닫지 않음. 새 `aria-live="assertive"` 영역으로 낭독, 포커스는 옮기지 않음.
+
+### 13.3 저장소 (5장 보완)
+| 키 | 값(JSON) | 설명 |
+|---|---|---|
+| `london-trip:v1:alarm` | `{ enabled, lead, sound, vibrate, items: { [itemId]: { lead } } }` | 전역 설정 + 켠 항목(`items`에 있으면 켜짐). 기본 `{enabled:true, lead:30, sound:false, vibrate:true, items:{}}` |
+| `london-trip:v1:alarmFired` | `{ [itemId]: firedKey }` | 이미 울린 알림. `firedKey` = 알림 시각 epoch ms 문자열. 시점·시작시간이 바뀌면 키가 달라져 다시 예약됨 |
+- 검증: 형식이 틀리면 기본값. `lead`는 허용 목록(5/10/15/30/60/90/120)만, 아니면 전역값. itemId는 기존 `validItemId`만 통과, 존재하지 않는 사용자 id는 로드 시 제거. `alarmFired` 값은 숫자 문자열만.
+- 사용자 일정 삭제 시 `items`·`alarmFired`에서 그 id도 지움. 숨긴 원본(S1)은 설정은 남기되 울리지 않음.
+- **백업(S2)**: `exportData`에 `alarm` 필드 추가(`version` 1 유지, `alarm` 없는 옛 파일도 가져오기 가능). `importData`는 `alarm.items`만 병합(전역 설정은 덮어쓰지 않음). `alarmFired`는 내보내지 않음.
+- 전체 초기화(접두사 삭제)에 두 키도 포함. "이 날 체크 초기화"는 알림에 영향 없음.
+
+### 13.4 스케줄링 로직
+- **기준 시각**: `time.js`에 순수 함수 `TripTime.toEpoch(dateISO, 'HH:MM', tz)` 추가 — Intl로 해당 시각의 오프셋을 구해 UTC ms로 변환. Intl 미지원 시 고정값(런던 BST UTC+1 — 2026년 서머타임 종료가 10/25라 여행 전체가 BST, 서울 UTC+9). 알림 시각 = `toEpoch(시작) − lead×60000`, 현재 = `TripTime.now().getTime()`(테스트용 덮어쓰기 그대로 반영). 기기 시간대와 무관.
+- **시간대 혼재**: r02 시작 08:45는 `Asia/Seoul`로 변환(= 10/15 23:45 UTC). r66은 시작이 없어 대상 아님. 나머지 원본·사용자 일정은 `Europe/London`.
+- **대상**: 전역 `enabled` && `items`에 있음 && 시작시간 있음 && 숨김 아님 && 완료 체크 안 됨(A8).
+- **타이머**: 기존 1분 `setInterval`과 `visibilitychange`에서 `TripAlarm.check()`를 함께 호출(재사용). 추가로 다음 알림까지 `setTimeout` 1개(24시간 넘으면 걸지 않음)로 열려 있을 때 정시에 울림. 설정·데이터 변경 시 다시 계산.
+- **check() 규칙**: `알림시각 ≤ 지금 < 알림시각 + 15분` && `alarmFired[id] !== firedKey`이면 발사 후 기록. `지금 ≥ 알림시각 + 15분`이면 울리지 않고 기록만(오래된 알림을 한꺼번에 띄우지 않음). 처음 켠 시점에 이미 지난 일정은 울리지 않고 "이미 지난 일정" 안내.
+- **중복 방지**: 발사 직전 localStorage의 `alarmFired`를 다시 읽어 확인·기록 후 표시(여러 탭 대비). 시스템 알림 `tag: 'lt-' + id + '-' + firedKey`로 OS 단에서도 합쳐짐.
+- **발사**: ① 토스트(항상) ② 권한 `granted`이고 top 창이면 시스템 알림 — SW 등록돼 있으면 `registration.showNotification`, 아니면 `new Notification`(try/catch, 실패 시 토스트만) ③ 진동 설정+지원 시 `navigator.vibrate([200,100,200])` ④ 소리 설정 && `AudioContext`가 사용자 제스처(설정 클릭)로 resume된 경우만 0.3초 비프. 시스템 알림 클릭 → 창 focus + 카드 이동.
+- 놓친 알림 문구: `16:00 런던아이 탑승 · 알림 시각 3분 지남`(이미 시작했으면 `시작됨`).
+
+### 13.5 캘린더 내보내기(.ics)
+- RFC 5545: `VERSION:2.0`, `PRODID:-//london-trip//KO`, `CALSCALE:GREGORIAN`, `METHOD:PUBLISH`, `X-WR-CALNAME:런던 여행`. CRLF, 75옥텟 접기(UTF-8 글자 중간에서 자르지 않음), TEXT의 `\ ; , 개행` 이스케이프.
+- 시간은 **UTC(`…Z`)로 변환**해 VTIMEZONE 없이 기록(`toEpoch` 재사용). r02: DTSTART 08:45 KST → `20261015T234500Z`, DTEND 17:20 런던 → `20261016T162000Z`로 실제 시각이 맞게 들어감.
+- VEVENT: `UID:{id}@london-trip`(다시 내보내도 같은 UID라 캘린더가 갱신), `DTSTAMP`, `DTSTART`, `DTEND`(종료 없으면 시작+15분), `SUMMARY`(이동이면 `→ ` 접두), `LOCATION`(addresses[0]), `DESCRIPTION`(이동수단·예상비용·비고 원문, **메모는 제외**). 알림 켠 항목만 `BEGIN:VALARM / ACTION:DISPLAY / TRIGGER:-PT{lead}M / DESCRIPTION:{제목}`.
+- 제외: 시작시간 없는 행(r66 등), 숨긴 원본, (`내 일정 포함` 끔이면) 사용자 일정. 대상 0개면 "내보낼 일정이 없습니다".
+- 파일: `Blob(…, {type:'text/calendar;charset=utf-8'})` + `a[download]`(S2와 같은 방식). 이름 `london-trip-alarms.ics` / `london-trip-2026-10-18.ics` / `london-trip-all.ics`.
+
+### 13.6 파일별 변경 범위 (4장 보완)
+| 파일 | 변경 |
+|---|---|
+| `alarm.js` (신규) | 전역 `TripAlarm`: 대상 계산 `upcoming(n)`, `check()`, 발사(토스트는 app.js 콜백, Notification·진동·소리), 권한 상태, `buildICS(items, opts)` |
+| `time.js` | `toEpoch(date, hhmm, tz)` 추가 |
+| `store.js` | `alarm`·`alarmFired` 키·검증·API, 사용자 일정 삭제 연동, export/import 확장 |
+| `app.js` | 벨 버튼·시점 select·알림 패널·토스트 렌더, 1분 타이머/visibilitychange에 `check()` 연결, 알림 클릭 → 카드 이동 |
+| `index.html` | 알림 패널·토스트·assertive live 영역, `<script src="alarm.js" defer>`(순서 data → time → store → alarm → app) |
+| `style.css` | 벨·패널·토스트, 라이트/다크 토큰(기존 `--accent`·`--bg-subtle`·`--now` 재사용), 44px, reduced-motion |
+| `sw.js` (신규, A4 승인 시) | `notificationclick`에서 창 focus만. **fetch 캐시·push 없음.** `https:`/`localhost`에서만 등록, `file://`이면 등록 안 함 |
+- 4장 "전역 3개 제한" → `TripAlarm` 포함 **4개**로 대체. 11장 "서비스 워커 범위 밖" → 알림 표시용 최소 sw.js만 예외(A4). 외부 라이브러리 없음, `apps/london-trip/` 밖 수정 없음.
+
+### 13.7 엣지 케이스
+1. 기기 잠김·브라우저 종료·백그라운드 정지 → 앱 알림은 안 울림. 패널에 "앱이 닫혀 있으면 울리지 않습니다. 캘린더 내보내기를 함께 쓰세요" 고정 안내.
+2. 사용자 일정 시간 수정 → firedKey가 바뀌어 다시 예약. 시작시간을 지우면 알림 해제, 삭제하면 설정 제거.
+3. 같은 시각 여러 알림 → 토스트 1개로 묶음, 시스템 알림은 항목별.
+4. 여행 전 한국에서 사용 → epoch 비교라 그대로 동작(r02 30분 전 = 한국 08:15).
+5. 권한 `denied`·미지원·iframe → 토스트만 + 패널에 이유 표시. 권한 요청 버튼을 반복해서 띄우지 않음.
+6. localStorage 차단 → 메모리로만 동작(기존 "저장되지 않습니다" 안내 재사용).
+7. 손상된 alarm 값(`"abc"`, `lead:7`, `r99`) → 유효한 부분만 사용.
+8. 데스크톱 백그라운드 탭 → 최대 약 1분 늦게 울릴 수 있음(허용).
+
+### 13.8 사용자 결정 필요
+| ID | 항목 | 기본안(제안) |
+|---|---|---|
+| A1 | 방식 조합 | **확정**: Notification + 토스트 + .ics |
+| A2 | 기본 알림 시점 / 선택지 | 30분 전 / 5·10·15·30·60·90·120분 |
+| A3 | 처음 켜져 있을 항목 | 모두 꺼짐. 패널의 `예약필요 항목 켜기`·`이동 항목 켜기`로 일괄 설정 |
+| A4 | Android Chrome 시스템 알림용 최소 `sw.js`(캐시·푸시 없음) 추가 | 추가. 거절하면 Android는 토스트만 |
+| A5 | 소리 / 진동 기본값 | 소리 끔, 진동 켬(Android만) |
+| A6 | r02(한국 출발 08:45) 알림 | 한국 시각 기준으로 지원. r66 제외 |
+| A7 | .ics 기본 범위 / 메모 포함 | 알림 켠 항목(전 일정) + 내 일정 포함 / 메모 제외 |
+| A8 | 완료 체크한 항목 알림 | 건너뜀 |
+
+### 13.9 완료 기준 (Review 체크리스트, 10장에 추가)
+- [ ] 시간 고정 발사: 콘솔에서 `TripTime.now = function () { return new Date('2026-10-18T14:59:30Z'); }`(런던 15:59:30), r30(런던아이 16:30) 30분 전 켬 → `TripAlarm.check()` 시 안 울림. `'2026-10-18T15:00:10Z'`로 바꾸고 `check()` → 토스트 1회 + `alarmFired.r30` 기록, 다시 `check()`해도 안 울림
+- [ ] 놓친 알림: `'2026-10-18T15:10:00Z'`에서 visibilitychange → "알림 시각 10분 지남". `'2026-10-18T15:20:00Z'`(15분 초과) → 울리지 않고 기록만
+- [ ] 시점 10분으로 바꾸면 재예약되어 런던 16:20에 울림. 사용자 일정 시간 수정·삭제 시 갱신/제거
+- [ ] 기기 시간대가 KST여도 런던 기준으로 울림. r02 알림이 `2026-10-15T23:15:00Z`에 울림. r66·시작 없는 일정은 벨 비활성
+- [ ] 전역 끄기·숨김·완료 항목은 안 울림. 일괄 버튼 개수: 예약필요 7, 이동 31(이동 30 + r57)
+- [ ] 데스크톱 권한 허용 시 시스템 알림 표시·클릭 시 카드 이동. 거부/미지원/iframe은 토스트만 + 안내
+- [ ] 두 탭 동시 실행 시 한 번만 기록
+- [ ] .ics: CRLF·75옥텟 접기·이스케이프, r30 `DTSTART:20261018T153000Z` + `TRIGGER:-PT30M`, r02 `DTSTART:20261015T234500Z`, r66 없음, 메모 없음. iOS 또는 PC 캘린더 가져오기 확인(못 하면 남은 위험에 기록)
+- [ ] 손상된 `london-trip:v1:alarm`에도 오류 없음. 백업 JSON에 `alarm` 포함·가져오기 병합. 전체 초기화 시 알림 키 삭제
+- [ ] 벨·토스트 버튼 44px, `aria-pressed`, assertive 낭독, 라이트/다크 대비 4.5:1, 360px 가로 스크롤 없음, 콘솔 에러·외부 요청 없음
+- [ ] `apps/london-trip/` 밖 변경 없음
+
+### 13.10 사용자 확정 (2026-10-14, 승인 완료)
+- A2·A3·A5·A6·A7·A8 → **제안(기본안)대로**.
+- A4 → **sw.js 포함** (알림 표시 전용, 캐시·푸시 없음).

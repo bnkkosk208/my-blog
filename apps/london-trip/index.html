@@ -18,6 +18,7 @@
   <script src="data.js" defer></script>
   <script src="time.js" defer></script>
   <script src="store.js" defer></script>
+  <script src="alarm.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -52,6 +53,47 @@
       <!-- 일정 -->
       <section class="panel" id="panel-schedule" role="tabpanel" aria-labelledby="tab-schedule">
         <div class="summary" id="daySummary" aria-label="일자 요약"></div>
+        <details class="alarm-panel" id="alarmPanel">
+          <summary><span id="alarmSummary">알림 꺼짐</span></summary>
+          <div class="alarm-body">
+            <label class="switch-row">
+              <input type="checkbox" role="switch" id="alarmEnabled">
+              <span>알림 사용</span>
+            </label>
+            <div class="alarm-perm" id="alarmPerm" aria-live="polite"></div>
+            <div class="alarm-opts">
+              <label class="inline-field">
+                <span>기본 알림 시점</span>
+                <select id="alarmLead"></select>
+              </label>
+              <label class="inline-check"><input type="checkbox" id="alarmSound"> <span>소리</span></label>
+              <label class="inline-check" id="alarmVibrateRow" hidden><input type="checkbox" id="alarmVibrate"> <span>진동</span></label>
+            </div>
+            <div class="settings-row alarm-bulk">
+              <button type="button" class="btn btn-small" data-bulk="reserve">예약필요 항목 켜기</button>
+              <button type="button" class="btn btn-small" data-bulk="move">이동 항목 켜기</button>
+              <button type="button" class="btn btn-small" data-bulk="day">이 날 모두 켜기</button>
+              <button type="button" class="btn btn-small btn-danger" data-bulk="off">모두 끄기</button>
+            </div>
+            <h3 class="alarm-h">다가오는 알림</h3>
+            <ul class="alarm-upcoming" id="alarmUpcoming"></ul>
+            <h3 class="alarm-h">캘린더로 내보내기 (.ics)</h3>
+            <fieldset class="ics-scope">
+              <legend class="sr-only">내보낼 범위</legend>
+              <label class="inline-check"><input type="radio" name="icsScope" value="alarms" checked> <span>알림 켠 항목(전 일정)</span></label>
+              <label class="inline-check"><input type="radio" name="icsScope" value="day"> <span>이 날 전체</span></label>
+              <label class="inline-check"><input type="radio" name="icsScope" value="all"> <span>여행 전체</span></label>
+            </fieldset>
+            <label class="inline-check"><input type="checkbox" id="icsCustom" checked> <span>내 일정 포함</span></label>
+            <button type="button" class="btn btn-small btn-primary" id="icsBtn">.ics 받기</button>
+            <ul class="muted small ics-guide">
+              <li>iOS: 받은 파일을 열고 ‘캘린더에 추가’ → ‘모두 추가’.</li>
+              <li>Android: 파일을 캘린더 앱(삼성 캘린더 등)으로 열기. 안 되면 PC의 calendar.google.com → 설정 → 가져오기.</li>
+              <li>PC: Outlook·Apple 캘린더로 열거나 Google 캘린더에서 가져오기.</li>
+            </ul>
+            <p class="alarm-note small">앱이 닫혀 있으면(화면 꺼짐·브라우저 종료) 알림이 울리지 않습니다. 캘린더 내보내기를 함께 쓰세요. 메모는 내보내지 않습니다.</p>
+          </div>
+        </details>
         <ol class="timeline" id="timeline" aria-label="시간대별 일정"></ol>
         <div class="hidden-rows" id="hiddenRows" hidden>
           <button type="button" class="btn btn-ghost btn-small" id="hiddenToggle" aria-expanded="false" aria-controls="hiddenList"></button>
@@ -173,6 +215,8 @@
     </form>
   </dialog>
 
+  <div class="toast-wrap" id="toastWrap"></div>
   <div class="sr-only" id="live" aria-live="polite"></div>
+  <div class="sr-only" id="liveAlert" aria-live="assertive"></div>
 </body>
 </html>

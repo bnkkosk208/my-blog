@@ -5,6 +5,7 @@
   var D = window.TRIP_DATA;
   var Store = window.TripStore;
   var T = window.TripTime;
+  var A = window.TripAlarm || null; // 알림(v2). 없으면 알림 UI만 생략
   if (!D || !Store || !T) {
     console.error('[london-trip] 필수 스크립트를 불러오지 못했습니다.');
     return;
@@ -270,6 +271,9 @@
     }
     if (!it.orig) box.appendChild(el('span', { class: 'badge b-mine', text: '내 일정' }));
     if (Store.getMemo(it.id)) box.appendChild(el('span', { class: 'badge b-memo', text: '메모' }));
+    if (A && it.start && Store.isAlarmOn(it.id)) {
+      box.appendChild(el('span', { class: 'badge b-alarm', text: '🔔 ' + Store.alarmLead(it.id) + '분 전' }));
+    }
     box.appendChild(el('span', { class: 'badge live-badge' }));
   }
 
@@ -311,6 +315,7 @@
     var cb = el('input', { type: 'checkbox', 'data-id': it.id });
     cb.checked = Store.isDone(it.id);
     var check = el('label', { class: 'check', title: '완료 체크' }, [cb, el('span', { class: 'sr-only', text: '완료: ' + it.title })]);
+    var side = el('div', { class: 'c-side' }, [check, A ? makeBell(it) : null]);
 
     var details = hasDetails(it);
     var toggle = el('button', {
@@ -320,7 +325,7 @@
     toggle.textContent = details ? (open ? '접기 ▾' : '펼치기 ▸') : (open ? '메모 닫기' : '메모');
 
     var li = el('li', { class: cls, id: 'card-' + it.id, 'data-id': it.id }, [
-      el('div', { class: 'c-top' }, [main, check]),
+      el('div', { class: 'c-top' }, [main, side]),
       el('div', { class: 'c-actions' }, [toggle]),
     ]);
     li._item = it;
@@ -332,8 +337,64 @@
     return li;
   }
 
+  // ---------- 알림: 카드 벨 / 시점 ----------
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+  function bellIcon() {
+    var svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', '22');
+    svg.setAttribute('height', '22');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+    var path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', 'M12 3.5a5.5 5.5 0 0 0-5.5 5.5v4.2L4.8 16.5h14.4l-1.7-3.3V9A5.5 5.5 0 0 0 12 3.5zM9.8 19a2.2 2.2 0 0 0 4.4 0z');
+    svg.appendChild(path);
+    return svg;
+  }
+  function makeBell(it) {
+    var can = !!it.start;
+    var on = can && Store.isAlarmOn(it.id);
+    return el('button', {
+      type: 'button', class: 'bell', 'data-act': 'bell', 'aria-pressed': on ? 'true' : 'false',
+      'aria-label': '알림 켜기: ' + it.title,
+      title: can ? (on ? '알림 ' + Store.alarmLead(it.id) + '분 전 (누르면 끄기)' : '알림 켜기') : '시작 시간이 없어 알림 불가',
+      disabled: !can,
+    }, [bellIcon()]);
+  }
+  /** 벨·배지·시점 select를 현재 설정으로 갱신(카드 DOM 유지) */
+  function updateAlarmUI(li) {
+    var it = li._item;
+    var bell = li.querySelector('.bell');
+    if (bell) bell.parentNode.replaceChild(makeBell(it), bell);
+    fillBadges(li.querySelector('.c-badges'), it);
+    var sel = li.querySelector('select.alarm-lead');
+    if (sel) {
+      sel.value = String(Store.alarmLead(it.id));
+      var hint = sel.parentNode.querySelector('.alarm-hint');
+      if (hint) hint.textContent = Store.isAlarmOn(it.id) ? '' : '(바꾸면 알림이 켜집니다)';
+    }
+    applyLive(true);
+  }
+  function leadSelect(value, attrs) {
+    var sel = el('select', attrs);
+    (A ? A.LEADS : []).forEach(function (m) {
+      var o = el('option', { value: String(m), text: m + '분 전' });
+      if (m === value) o.selected = true;
+      sel.appendChild(o);
+    });
+    return sel;
+  }
+
   function buildDetail(box, it) {
     clear(box);
+    if (A && it.start) {
+      var lid = 'lead-' + it.id;
+      box.appendChild(el('div', { class: 'alarm-row' }, [
+        el('label', { for: lid, text: '알림 시점' }),
+        leadSelect(Store.alarmLead(it.id), { id: lid, class: 'alarm-lead', 'data-id': it.id }),
+        el('span', { class: 'muted small alarm-hint', text: Store.isAlarmOn(it.id) ? '' : '(바꾸면 알림이 켜집니다)' }),
+      ]));
+    }
     if (it.note) {
       box.appendChild(el('h4', { text: '비고' }));
       box.appendChild(appendLinked(el('p', { class: 'c-note' }), it.note, it.links));
@@ -476,6 +537,8 @@
     updateDayProgress();
     state.lastLiveKey = '';
     applyLive(true);
+    $('timeline').classList.toggle('alarms-off', !!A && !Store.getAlarm().enabled);
+    alarmRefresh();
   }
 
   // ---------- 진행 중 / 다음 ----------
@@ -765,18 +828,224 @@
     editingId = null;
   }
 
-  // ---------- 내보내기 / 가져오기 ----------
-  function exportData() {
-    var data = Store.exportData();
-    var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  // ---------- 알림 패널 / 토스트 (spec 13.2) ----------
+  function alarmWhen(e) {
+    var tz = A.startTz(e.item);
+    var f = T.format(e.at, tz);
+    return f.md + ' ' + f.hhmm + (tz === 'Asia/Seoul' ? '(한국)' : '');
+  }
+  /** 설정·데이터 변경 후: 다시 예약하고 패널 갱신 */
+  function alarmRefresh() {
+    if (!A) return;
+    A.reschedule();
+    renderAlarmPanel();
+  }
+  /** 1분 타이머·탭 복귀: 울릴 알림 확인 */
+  function alarmTick() {
+    if (!A) return;
+    A.check();
+    renderAlarmPanel();
+  }
+
+  function renderAlarmPanel() {
+    if (!A) return;
+    var cfg = Store.getAlarm();
+    var up = A.upcoming(5);
+    var sum = $('alarmSummary');
+    var onCount = Object.keys(cfg.items).length;
+    if (!cfg.enabled) sum.textContent = '🔕 알림 꺼짐';
+    else if (up.next.length) {
+      var n = up.next[0];
+      sum.textContent = '🔔 다음 알림 ' + alarmWhen(n) + ' · ' + n.item.title + ' (' + n.lead + '분 전)';
+    } else sum.textContent = onCount ? '🔔 예정된 알림 없음' : '🔕 알림 꺼짐 (켠 항목 없음)';
+
+    $('alarmEnabled').checked = cfg.enabled;
+    $('alarmLead').value = String(cfg.lead);
+    $('alarmSound').checked = cfg.sound;
+    $('alarmVibrate').checked = cfg.vibrate;
+    $('alarmVibrateRow').hidden = !A.canVibrate();
+
+    var perm = $('alarmPerm');
+    var p = A.permission();
+    if (perm.getAttribute('data-perm') !== p) {
+      perm.setAttribute('data-perm', p);
+      clear(perm);
+      var lbl = el('span', { text: '시스템 알림: ' });
+      if (p === 'granted') perm.appendChild(el('p', null, [lbl, el('strong', { text: '허용됨' })]));
+      else if (p === 'denied') perm.appendChild(el('p', null, [lbl, el('strong', { text: '거부됨' }), ' (브라우저 설정에서 변경) · 앱 안 알림(토스트)만 표시됩니다.']));
+      else if (p === 'unsupported') perm.appendChild(el('p', null, [lbl, el('strong', { text: '미지원' }), ' · 앱 안 알림(토스트)만 표시됩니다.']));
+      else if (p === 'iframe') {
+        perm.appendChild(el('p', null, [lbl, el('strong', { text: 'iframe 안' }), ' · 앱 안 알림만 표시됩니다. 시스템 알림은 ',
+          el('a', { href: './index.html', target: '_blank', rel: 'noopener', text: '새 창에서 열기 ↗' }), ' 후 사용하세요.']));
+      } else {
+        perm.appendChild(el('p', null, [lbl, '아직 허용하지 않음']));
+        perm.appendChild(el('button', { type: 'button', class: 'btn btn-small', id: 'alarmPermBtn', text: '시스템 알림 허용' }));
+      }
+    }
+
+    var ul = $('alarmUpcoming');
+    clear(ul);
+    var rows = up.missed.map(function (e) { return { e: e, missed: true }; })
+      .concat(up.next.map(function (e) { return { e: e, missed: false }; }));
+    if (!cfg.enabled) ul.appendChild(el('li', { class: 'muted small', text: '알림 사용이 꺼져 있습니다.' }));
+    else if (!rows.length) ul.appendChild(el('li', { class: 'muted small', text: '다가오는 알림이 없습니다. 카드의 벨이나 위 버튼으로 켜세요.' }));
+    rows.forEach(function (r) {
+      var e = r.e;
+      ul.appendChild(el('li', null, [el('button', { type: 'button', class: 'up-item', 'data-goto': e.item.id }, [
+        r.missed ? el('span', { class: 'badge b-missed', text: '놓침' }) : null,
+        el('span', { class: 'up-time', text: alarmWhen(e) }),
+        el('span', { class: 'up-title', text: e.item.title }),
+        el('span', { class: 'up-lead', text: e.lead + '분 전' }),
+      ])]));
+    });
+  }
+
+  function showToast(list) {
+    var wrap = $('toastWrap');
+    var now = T.now().getTime();
+    var texts = list.map(function (e) { return A.describe(e, now).text; });
+    var lines = el('ul', { class: 'toast-lines' });
+    texts.slice(0, 3).forEach(function (t) { lines.appendChild(el('li', { text: t })); });
+    if (texts.length > 3) lines.appendChild(el('li', { class: 'toast-more', text: '외 ' + (texts.length - 3) + '개' }));
+    var firstId = list[0].item.id;
+    var toast = el('div', { class: 'toast' }, [
+      el('span', { class: 'toast-icon', 'aria-hidden': 'true', text: '🔔' }),
+      lines,
+      el('div', { class: 'toast-actions' }, [
+        el('button', { type: 'button', class: 'btn btn-small btn-primary', 'data-toast': 'view', 'data-id': firstId, text: '보기' }),
+        el('button', { type: 'button', class: 'btn btn-small', 'data-toast': 'close', text: '닫기' }),
+      ]),
+    ]);
+    wrap.appendChild(toast);
+    while (wrap.children.length > 3) wrap.removeChild(wrap.firstChild);
+    var live = $('liveAlert');
+    live.textContent = '';
+    window.setTimeout(function () { live.textContent = '알림: ' + texts.join(', '); }, 50);
+  }
+
+  /** 항목으로 이동: 그 날 탭 → 카드 펼침 → 스크롤 */
+  function gotoItem(id) {
+    var it = A ? A.findItem(id) : null;
+    if (!it || !dayInfo(it.date)) return;
+    state.open[id] = true;
+    state.userScrolled = true;
+    if (state.view !== 'schedule') switchView('schedule');
+    selectDay(it.date);
+    var card = $('card-' + id);
+    if (!card) return; // 숨긴 항목
+    window.requestAnimationFrame(function () {
+      scrollPageTo(card, stickyHeight());
+      card.classList.remove('flash');
+      void card.offsetWidth;
+      card.classList.add('flash');
+      var b = card.querySelector('[data-act="toggle"]');
+      if (b) b.focus({ preventScroll: true });
+    });
+  }
+
+  function bulkEnable(kind) {
+    if (!A) return;
+    var res;
+    if (kind === 'off') {
+      if (!window.confirm('모든 항목의 알림을 끌까요?')) return;
+      Store.clearAlarmItems();
+      renderSchedule();
+      announce('모든 알림을 껐습니다.');
+      return;
+    }
+    if (kind === 'reserve') {
+      var resv = {};
+      D.schedule.forEach(function (s) { if (s.reservation) resv[s.id] = true; });
+      res = A.enableWhere(function (it) { return resv[it.id] === true; });
+    } else if (kind === 'move') {
+      res = A.enableWhere(function (it) { return it.type === '이동' || it.type === '이동/활동'; });
+    } else if (kind === 'day') {
+      var day = state.day;
+      res = A.enableWhere(function (it) { return it.date === day; });
+    } else return;
+    renderSchedule();
+    announce('알림 ' + res.count + '개를 켰습니다.' + (res.past ? ' (이미 지난 일정 ' + res.past + '개는 울리지 않습니다)' : ''));
+  }
+
+  function downloadBlob(blob, name) {
     var url = URL.createObjectURL(blob);
-    var lt = londonInfo();
-    var stamp = (lt ? lt.date : new Date().toISOString().slice(0, 10)).replace(/-/g, '');
-    var a = el('a', { href: url, download: 'london-trip-backup-' + stamp + '.json' });
+    var a = el('a', { href: url, download: name });
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function exportICS() {
+    var r = document.querySelector('input[name="icsScope"]:checked');
+    var scope = r ? r.value : 'alarms';
+    var items = A.exportItems(scope, state.day, $('icsCustom').checked);
+    var ics = A.buildICS(items);
+    if (!ics.count) { window.alert('내보낼 일정이 없습니다.'); return; }
+    var name = scope === 'alarms' ? 'london-trip-alarms.ics' : scope === 'day' ? 'london-trip-' + state.day + '.ics' : 'london-trip-all.ics';
+    downloadBlob(new Blob([ics.text], { type: 'text/calendar;charset=utf-8' }), name);
+    announce('캘린더 파일(' + ics.count + '개 일정)을 내보냈습니다.');
+  }
+
+  function bindAlarm() {
+    if (!A) { $('alarmPanel').hidden = true; return; }
+    var leadSel = $('alarmLead');
+    A.LEADS.forEach(function (m) { leadSel.appendChild(el('option', { value: String(m), text: m + '분 전' })); });
+
+    $('alarmEnabled').addEventListener('change', function (e) {
+      Store.setAlarmGlobal({ enabled: e.target.checked });
+      renderSchedule();
+      alarmTick();
+      announce(e.target.checked ? '알림을 사용합니다.' : '알림을 껐습니다. 항목 설정은 유지됩니다.');
+    });
+    leadSel.addEventListener('change', function (e) {
+      Store.setAlarmGlobal({ lead: +e.target.value });
+      renderAlarmPanel();
+    });
+    $('alarmSound').addEventListener('change', function (e) {
+      if (e.target.checked) A.primeAudio();
+      Store.setAlarmGlobal({ sound: e.target.checked });
+    });
+    $('alarmVibrate').addEventListener('change', function (e) {
+      Store.setAlarmGlobal({ vibrate: e.target.checked });
+    });
+    $('alarmPanel').addEventListener('click', function (e) {
+      var t = e.target;
+      if (Store.getAlarm().sound) A.primeAudio();
+      if (t.closest('#alarmPermBtn')) {
+        A.requestPermission().then(function (p) {
+          renderAlarmPanel();
+          announce(p === 'granted' ? '시스템 알림을 허용했습니다.' : '시스템 알림이 허용되지 않았습니다. 앱 안 알림만 표시됩니다.');
+        });
+        return;
+      }
+      var b = t.closest('[data-bulk]');
+      if (b) { bulkEnable(b.getAttribute('data-bulk')); return; }
+      var g = t.closest('[data-goto]');
+      if (g) { gotoItem(g.getAttribute('data-goto')); return; }
+      if (t.closest('#icsBtn')) exportICS();
+    });
+    $('toastWrap').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-toast]');
+      if (!b) return;
+      var toast = b.closest('.toast');
+      if (b.getAttribute('data-toast') === 'view') gotoItem(b.getAttribute('data-id'));
+      if (toast && toast.parentNode) toast.parentNode.removeChild(toast);
+    });
+
+    A.init({
+      onFire: function (list) { showToast(list); renderAlarmPanel(); },
+      onOpen: function (id) { gotoItem(id); },
+    });
+  }
+
+  // ---------- 내보내기 / 가져오기 ----------
+  function exportData() {
+    var data = Store.exportData();
+    var blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    var lt = londonInfo();
+    var stamp = (lt ? lt.date : new Date().toISOString().slice(0, 10)).replace(/-/g, '');
+    downloadBlob(blob, 'london-trip-backup-' + stamp + '.json');
     announce('백업 파일을 내보냈습니다.');
   }
   function importFile(file) {
@@ -787,7 +1056,7 @@
       var res = obj ? Store.importData(obj) : { ok: false, error: 'JSON 파일을 읽을 수 없습니다.' };
       if (!res.ok) { window.alert('가져오기 실패: ' + res.error); return; }
       var c = res.counts;
-      window.alert('가져오기 완료\n완료 ' + c.done + ' · 메모 ' + c.memo + ' · 내 일정 ' + c.custom + ' · 숨김 ' + c.hidden + ' · 예약완료 ' + c.booked);
+      window.alert('가져오기 완료\n완료 ' + c.done + ' · 메모 ' + c.memo + ' · 내 일정 ' + c.custom + ' · 숨김 ' + c.hidden + ' · 예약완료 ' + c.booked + ' · 알림 ' + (c.alarm || 0));
       switchView(state.view);
     };
     reader.onerror = function () { window.alert('파일을 읽지 못했습니다.'); };
@@ -836,6 +1105,16 @@
         if (card) card.classList.toggle('is-done', t.checked);
         renderSummary();
         updateDayProgress();
+        alarmRefresh();
+      } else if (A && t.matches('select.alarm-lead')) {
+        var aid = t.getAttribute('data-id');
+        var lead = +t.value;
+        var r = A.setItem(aid, true, lead);
+        if (!r.ok) return;
+        var li = $('card-' + aid);
+        if (li) updateAlarmUI(li);
+        alarmRefresh();
+        announce(r.past ? '이미 지난 일정입니다. 알림이 울리지 않습니다.' : '알림을 ' + lead + '분 전으로 설정했습니다.');
       }
     });
     tl.addEventListener('click', function (e) {
@@ -849,7 +1128,20 @@
         var a = act.getAttribute('data-act');
         var it = li._item;
         if (a === 'toggle') toggleCard(li);
-        else if (a === 'hide') {
+        else if (a === 'bell') {
+          if (!A || !it.start) return;
+          if (Store.getAlarm().sound) A.primeAudio();
+          var on = !Store.isAlarmOn(it.id);
+          var res = A.setItem(it.id, on);
+          if (!res.ok) return;
+          updateAlarmUI(li);
+          var nb = li.querySelector('.bell');
+          if (nb) nb.focus();
+          alarmRefresh();
+          if (!on) announce('‘' + it.title + '’ 알림을 껐습니다.');
+          else if (res.past) announce('이미 지난 일정입니다. ‘' + it.title + '’ 알림은 울리지 않습니다.');
+          else announce('‘' + it.title + '’ 알림을 켰습니다 (' + Store.alarmLead(it.id) + '분 전).' + (Store.getAlarm().enabled ? '' : ' 전역 알림 사용이 꺼져 있습니다.'));
+        } else if (a === 'hide') {
           Store.setHidden(it.id, true);
           delete state.open[it.id];
           renderSchedule();
@@ -956,7 +1248,9 @@
 
     window.addEventListener('hashchange', function () {
       var d = parseHash();
-      if (d) { switchView('schedule'); selectDay(d); }
+      var item = parseHashItem();
+      if (item) gotoItem(item);
+      else if (d) { switchView('schedule'); selectDay(d); }
     });
 
     var markScroll = function () { state.userScrolled = true; };
@@ -967,16 +1261,23 @@
     });
 
     document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState === 'visible') applyLive(false);
+      if (document.visibilityState === 'visible') { applyLive(false); alarmTick(); }
     });
-    window.setInterval(function () { applyLive(false); }, 60000);
+    window.setInterval(function () { applyLive(false); alarmTick(); }, 60000);
+    bindAlarm();
 
     Store.onChange(function (what) { if (what === 'writeFailed') $('storageWarn').hidden = false; });
   }
 
+  // '#day=2026-10-18' 또는 알림 클릭용 '#day=2026-10-18&item=r30'
+  var HASH_RE = /^#day=(\d{4}-\d{2}-\d{2})(?:&item=([a-z0-9_]{1,30}))?$/;
   function parseHash() {
-    var m = /^#day=(\d{4}-\d{2}-\d{2})$/.exec(window.location.hash || '');
+    var m = HASH_RE.exec(window.location.hash || '');
     return m && dayInfo(m[1]) ? m[1] : null;
+  }
+  function parseHashItem() {
+    var m = HASH_RE.exec(window.location.hash || '');
+    return m && m[2] && dayInfo(m[1]) ? m[2] : null;
   }
 
   // ---------- 시작 ----------
@@ -1003,6 +1304,9 @@
     renderDayTabs();
     bind();
     switchView(view);
+    var hashItem = parseHashItem();
+    if (hashItem) gotoItem(hashItem);
+    alarmTick();
   }
 
   start();

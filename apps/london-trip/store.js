@@ -14,7 +14,11 @@
     booked: PREFIX + 'v1:booked',
     lastDay: PREFIX + 'lastDay',
     lastView: PREFIX + 'lastView',
+    alarm: PREFIX + 'v1:alarm',
+    alarmFired: PREFIX + 'v1:alarmFired',
   };
+  var LEADS = [5, 10, 15, 30, 60, 90, 120];
+  function defaultAlarm() { return { enabled: true, lead: 30, sound: false, vibrate: true, items: {} }; }
   var MEMO_MAX = 2000;
   var TITLE_MAX = 200;
   var TEXT_MAX = 200;
@@ -39,10 +43,13 @@
 
   var validRows = {};   // { r02: true, ... }
   var validDates = {};  // { '2026-10-16': true, ... }
-  var state = { done: {}, memo: {}, custom: [], hidden: {}, booked: {}, lastDay: null, lastView: null };
+  var state = emptyState();
   var writeFailed = false;
   var listeners = [];
 
+  function emptyState() {
+    return { done: {}, memo: {}, custom: [], hidden: {}, booked: {}, lastDay: null, lastView: null, alarm: defaultAlarm(), alarmFired: {} };
+  }
   function isObj(v) { return v !== null && typeof v === 'object' && !Array.isArray(v); }
   function own(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
 
@@ -131,6 +138,48 @@
     return out;
   }
 
+  // ---------- 알림 검증 ----------
+  function validLead(v) { return typeof v === 'number' && LEADS.indexOf(v) >= 0; }
+  /** 사용자 id는 현재 저장된 사용자 일정에 있어야 함 */
+  function alarmIdOk(id) {
+    if (!validItemId(id)) return false;
+    if (USER_ID_RE.test(id)) return state.custom.some(function (c) { return c.id === id; });
+    return true;
+  }
+  function cleanAlarmItems(v, globalLead) {
+    var out = {};
+    if (!isObj(v)) return out;
+    Object.keys(v).forEach(function (k) {
+      if (!alarmIdOk(k)) return;
+      var it = v[k];
+      var lead = isObj(it) && validLead(it.lead) ? it.lead : globalLead;
+      out[k] = { lead: lead };
+    });
+    return out;
+  }
+  function cleanAlarm(v) {
+    var a = defaultAlarm();
+    if (!isObj(v)) return a;
+    if (typeof v.enabled === 'boolean') a.enabled = v.enabled;
+    if (validLead(v.lead)) a.lead = v.lead;
+    if (typeof v.sound === 'boolean') a.sound = v.sound;
+    if (typeof v.vibrate === 'boolean') a.vibrate = v.vibrate;
+    a.items = cleanAlarmItems(v.items, a.lead);
+    return a;
+  }
+  function cleanFired(v) {
+    var out = {};
+    if (!isObj(v)) return out;
+    Object.keys(v).forEach(function (k) {
+      if (alarmIdOk(k) && typeof v[k] === 'string' && /^\d{1,15}$/.test(v[k])) out[k] = v[k];
+    });
+    return out;
+  }
+  function persistAlarm() { writeJSON(K.alarm, state.alarm); }
+  function persistFired() {
+    if (Object.keys(state.alarmFired).length === 0) rawSet(K.alarmFired, null); else writeJSON(K.alarmFired, state.alarmFired);
+  }
+
   function load() {
     state.done = cleanFlagMap(readJSON(K.done), false);
     state.memo = cleanMemo(readJSON(K.memo));
@@ -141,6 +190,9 @@
     state.lastDay = ld && validDates[ld] === true ? ld : null;
     var lv = rawGet(K.lastView);
     state.lastView = lv && VIEWS.indexOf(lv) >= 0 ? lv : null;
+    // 사용자 일정 검증 이후에 읽는다(없는 사용자 id 제거)
+    state.alarm = cleanAlarm(readJSON(K.alarm));
+    state.alarmFired = cleanFired(readJSON(K.alarmFired));
   }
 
   function persistMap(name) {
@@ -247,9 +299,76 @@
       state.custom = state.custom.filter(function (c) { return c.id !== id; });
       delete state.done[id];
       delete state.memo[id];
+      var hadAlarm = own(state.alarm.items, id);
+      delete state.alarm.items[id];
+      delete state.alarmFired[id];
       persistCustom();
       persistMap('done');
       persistMap('memo');
+      if (hadAlarm) persistAlarm();
+      persistFired();
+    },
+
+    // 알림 (13.3)
+    LEADS: LEADS.slice(),
+    /** 전역 설정 + 항목 복사본 */
+    getAlarm: function () { return copy(state.alarm); },
+    /** 전역 설정 변경: {enabled, lead, sound, vibrate} 중 일부 */
+    setAlarmGlobal: function (f) {
+      if (!isObj(f)) return;
+      if (typeof f.enabled === 'boolean') state.alarm.enabled = f.enabled;
+      if (validLead(f.lead)) state.alarm.lead = f.lead;
+      if (typeof f.sound === 'boolean') state.alarm.sound = f.sound;
+      if (typeof f.vibrate === 'boolean') state.alarm.vibrate = f.vibrate;
+      persistAlarm();
+    },
+    isAlarmOn: function (id) { return own(state.alarm.items, id); },
+    /** 항목 알림 시점(분). 꺼져 있으면 전역 기본값 */
+    alarmLead: function (id) {
+      return own(state.alarm.items, id) ? state.alarm.items[id].lead : state.alarm.lead;
+    },
+    /** 항목 켜기/끄기. lead 생략 시 기존값 또는 전역 기본값 */
+    setAlarmItem: function (id, on, lead) {
+      if (!alarmIdOk(id)) return false;
+      if (on) {
+        var l = validLead(lead) ? lead : (own(state.alarm.items, id) ? state.alarm.items[id].lead : state.alarm.lead);
+        state.alarm.items[id] = { lead: l };
+      } else {
+        delete state.alarm.items[id];
+      }
+      persistAlarm();
+      return true;
+    },
+    /** 여러 항목 켜기. 새로 켠 id 배열 반환 */
+    setAlarmItems: function (ids) {
+      var added = [];
+      ids.forEach(function (id) {
+        if (!alarmIdOk(id)) return;
+        if (!own(state.alarm.items, id)) added.push(id);
+        state.alarm.items[id] = { lead: own(state.alarm.items, id) ? state.alarm.items[id].lead : state.alarm.lead };
+      });
+      persistAlarm();
+      return added;
+    },
+    clearAlarmItems: function () {
+      state.alarm.items = {};
+      persistAlarm();
+    },
+    /** 저장소에서 다시 읽은 발사 기록(여러 탭 대비) */
+    getFired: function (id) {
+      if (ls && !writeFailed) state.alarmFired = cleanFired(readJSON(K.alarmFired)); // 없거나 손상이면 {}
+      return own(state.alarmFired, id) ? state.alarmFired[id] : null;
+    },
+    /**
+     * 발사 기록. 저장소를 다시 읽어 이미 같은 키가 있으면 false(다른 탭이 이미 울림).
+     * 기록에 성공하면 true.
+     */
+    claimFired: function (id, key) {
+      if (!alarmIdOk(id) || !/^\d{1,15}$/.test(String(key))) return false;
+      if (this.getFired(id) === String(key)) return false;
+      state.alarmFired[id] = String(key);
+      persistFired();
+      return true;
     },
 
     // 마지막 위치
@@ -284,7 +403,7 @@
           keys.forEach(function (k) { ls.removeItem(k); });
         } catch (e) { /* noop */ }
       }
-      state = { done: {}, memo: {}, custom: [], hidden: {}, booked: {}, lastDay: null, lastView: null };
+      state = emptyState();
     },
 
     // 내보내기/가져오기(S2)
@@ -298,6 +417,7 @@
         custom: copy(state.custom),
         hidden: copy(state.hidden),
         booked: copy(state.booked),
+        alarm: copy(state.alarm),
       };
     },
     /** 검증 후 병합. 반환: {ok, counts} 또는 {ok:false, error} */
@@ -320,11 +440,16 @@
       });
       ['done', 'memo', 'hidden', 'booked'].forEach(persistMap);
       persistCustom();
+      // 알림: 항목만 병합(전역 설정은 덮어쓰지 않음). 사용자 일정 병합 후 검증
+      var alarmItems = isObj(obj.alarm) ? cleanAlarmItems(obj.alarm.items, state.alarm.lead) : {};
+      Object.keys(alarmItems).forEach(function (k) { state.alarm.items[k] = alarmItems[k]; });
+      if (Object.keys(alarmItems).length) persistAlarm();
       return {
         ok: true,
         counts: {
           done: Object.keys(done).length, memo: Object.keys(memo).length, custom: custom.length,
           hidden: Object.keys(hidden).length, booked: Object.keys(booked).length,
+          alarm: Object.keys(alarmItems).length,
         },
       };
     },
