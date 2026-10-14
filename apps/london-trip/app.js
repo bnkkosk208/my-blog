@@ -187,7 +187,8 @@
     return it.orig && Object.prototype.hasOwnProperty.call(PLACES, it.id) ? PLACES[it.id] : null;
   }
   function hasDetails(it) {
-    return !!(it.note || it.restaurants.length || it.cafes.length || it.addresses.length || placeOf(it));
+    // 사진은 접힌 카드에 상시 표시되므로 펼칠 내용 판단에서 제외 (spec 16.1)
+    return !!(it.note || it.restaurants.length || it.cafes.length || it.addresses.length);
   }
   function highlightable(it) {
     return it.tz === 'Europe/London' && it.start !== null;
@@ -379,12 +380,6 @@
     }
     if (!it.orig) box.appendChild(el('span', { class: 'badge b-mine', text: '내 일정' }));
     if (Store.getMemo(it.id)) box.appendChild(el('span', { class: 'badge b-memo', text: '메모' }));
-    if (prefs.img && placeOf(it)) { // 접힌 카드에는 썸네일 대신 표시만 (spec 15.6 C3)
-      box.appendChild(el('span', { class: 'badge b-img', title: '장소 사진 있음 (펼치면 표시)' }, [
-        el('span', { 'aria-hidden': 'true', text: '🖼' }),
-        el('span', { class: 'sr-only', text: '사진 있음' }),
-      ]));
-    }
     if (A && it.start && Store.isAlarmOn(it.id)) {
       box.appendChild(el('span', { class: 'badge b-alarm', text: '🔔 ' + Store.alarmLead(it.id) + '분 전' }));
     }
@@ -439,8 +434,11 @@
     });
     toggle.textContent = details ? (open ? '접기 ▾' : '펼치기 ▸') : (open ? '메모 닫기' : '메모');
 
+    // 장소 사진: 접힘과 무관하게 헤더 아래 상시 표시, 설정 끔이면 미렌더 (spec 16.1)
+    var pl = prefs.img ? placeOf(it) : null;
     var li = el('li', { class: cls, id: 'card-' + it.id, 'data-id': it.id }, [
       el('div', { class: 'c-top' }, [main, side]),
+      pl ? placeBlock(pl) : null,
       el('div', { class: 'c-actions' }, [toggle]),
     ]);
     li._item = it;
@@ -518,10 +516,6 @@
   }
   function placeBlock(pl) {
     var wrap = el('div', { class: 'place-media' });
-    if (!prefs.img) {
-      wrap.appendChild(el('p', { class: 'small muted img-off' }, ['사진 표시 꺼짐 · ', searchLink(pl)]));
-      return wrap;
-    }
     var img = el('img', {
       src: pl.img, alt: pl.ko + ' 사진', width: String(pl.w), height: String(pl.h), loading: 'lazy', decoding: 'async',
     });
@@ -570,9 +564,7 @@
   }
 
   function buildDetail(box, it) {
-    clear(box);
-    var pl = placeOf(it);
-    if (pl) box.appendChild(placeBlock(pl));
+    clear(box); // 사진은 카드 본문에 상시 표시 → 펼친 영역에는 중복 표시하지 않음 (spec 16.1)
     if (A && it.start) {
       var lid = 'lead-' + it.id;
       box.appendChild(el('div', { class: 'alarm-row' }, [
@@ -1070,7 +1062,7 @@
       $('panel-' + v).hidden = !sel;
     });
     $('dayTabs').hidden = view !== 'schedule';
-    if (view === 'schedule') { renderSchedule(); centerDayTab(); }
+    if (view === 'schedule') { renderSchedule(); centerDayTab(); maybeSwipeHint(); }
     else if (view === 'booking') renderBooking();
     else if (view === 'food') renderFood();
     updateNowBtnSoon();
@@ -1407,6 +1399,192 @@
     });
   }
 
+  // ---------- 일자 좌우 스와이프 (spec 16.2) ----------
+  var SWIPE_LOCK = 10;          // 방향 판정 시작 이동량(px)
+  var SWIPE_DIST = 60;          // 거리만으로 확정
+  var SWIPE_MIN = 30;           // 속도 조건과 함께 확정
+  var SWIPE_VEL = 0.5;          // px/ms
+  var SWIPE_EDGE = 20;          // 화면 가장자리 시작 무시(iOS 뒤로가기)
+  var SWIPE_MS = 180;           // 슬라이드 아웃/인 시간
+  var SWIPE_IGNORE = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], dialog, #alarmPanel, .settings, #dayTabs';
+  var PREF_SWIPE_HINT = 'london-trip:swipeHint';
+  var sw = null;                // 진행 중 제스처
+  var swPointers = 0;           // 화면에 닿아 있는 터치 포인터 수
+  var swAnimating = false;
+  var swSuppressClick = 0;      // 스와이프 직후 click 1회 억제 기한(ms, performance 기준 아님 → Date.now)
+
+  function swipeTargets() { return [$('daySummary'), $('timeline')]; }
+  function setSwipeX(x, ms) {
+    swipeTargets().forEach(function (n) {
+      if (!n) return;
+      n.style.transition = ms ? 'transform ' + ms + 'ms ease-out, opacity ' + ms + 'ms ease-out' : 'none';
+      n.style.transform = x ? 'translateX(' + x + 'px)' : '';
+    });
+  }
+  function setSwipeOpacity(o) {
+    swipeTargets().forEach(function (n) { if (n) n.style.opacity = o === 1 ? '' : String(o); });
+  }
+  function swipeReset(animate) {
+    var reduce = autoBehavior() === 'auto';
+    setSwipeX(0, animate && !reduce ? SWIPE_MS : 0);
+    setSwipeOpacity(1);
+    window.setTimeout(function () {
+      if (sw || swAnimating) return;
+      $('panel-schedule').classList.remove('is-swiping');
+      setSwipeX(0, 0);
+    }, animate && !reduce ? SWIPE_MS + 20 : 0);
+  }
+  function hasTextSelection() {
+    try {
+      var s = window.getSelection ? window.getSelection() : null;
+      return !!(s && !s.isCollapsed && String(s).trim());
+    } catch (e) { return false; }
+  }
+  function dayIndexOf(date) {
+    for (var i = 0; i < DAYS.length; i++) if (DAYS[i].date === date) return i;
+    return -1;
+  }
+  /** 날짜 변경 후 새 날짜 맨 위로 — 이미 그 위치보다 아래로 내려가 있을 때만 (spec 16.2 · D6) */
+  function scrollToDayTop() {
+    var panel = $('panel-schedule');
+    var top = panel.getBoundingClientRect().top + window.pageYOffset - stickyHeight();
+    if (window.pageYOffset > top + 1) scrollToY(Math.max(0, top), 'auto');
+  }
+  function commitSwipe(dir) {
+    var idx = dayIndexOf(state.day) + dir;
+    var info = DAYS[idx];
+    var w = Math.max(160, $('panel-schedule').clientWidth);
+    var finish = function () {
+      selectDay(info.date);
+      scrollToDayTop();
+      announce('Day ' + info.dayNo + ' · ' + info.label);
+    };
+    if (autoBehavior() === 'auto') { // reduced-motion: 즉시 전환
+      swAnimating = false;
+      swipeReset(false);
+      finish();
+      return;
+    }
+    swAnimating = true;
+    setSwipeX(-dir * w, SWIPE_MS);
+    setSwipeOpacity(0);
+    window.setTimeout(function () {
+      finish();
+      setSwipeX(dir * w * 0.5, 0);           // 반대편에서
+      void $('timeline').offsetWidth;
+      setSwipeX(0, SWIPE_MS);                // 슬라이드 인
+      setSwipeOpacity(1);
+      window.setTimeout(function () {
+        swAnimating = false;
+        swipeReset(false);
+      }, SWIPE_MS + 20);
+    }, SWIPE_MS);
+  }
+
+  function onSwipeDown(e) {
+    if (e.pointerType !== 'touch') return; // 데스크톱 마우스 드래그 미지원 (D3)
+    if (e.isPrimary) swPointers = 0; // 첫 손가락 = 화면에 다른 터치 없음 → 유실된 up/cancel로 카운터가 굳는 것 방지 (Review v5)
+    swPointers++;
+    if (sw) { // 두 번째 손가락: 이번 제스처 취소
+      if (sw.lock === 'h') swipeReset(true);
+      sw = null;
+      return;
+    }
+    if (swPointers > 1 || swAnimating || state.view !== 'schedule') return;
+    var vw = window.innerWidth || document.documentElement.clientWidth;
+    if (e.clientX < SWIPE_EDGE || e.clientX > vw - SWIPE_EDGE) return;
+    var t = e.target;
+    if (t && t.closest && t.closest(SWIPE_IGNORE)) return;
+    if (t && t.isContentEditable) return;
+    if (hasTextSelection()) return;
+    sw = { id: e.pointerId, x0: e.clientX, y0: e.clientY, dx: 0, lock: null, samples: [{ x: e.clientX, t: e.timeStamp }] };
+  }
+  function onSwipeMove(e) {
+    if (!sw || e.pointerId !== sw.id) return;
+    var dx = e.clientX - sw.x0;
+    var dy = e.clientY - sw.y0;
+    sw.dx = dx;
+    sw.samples.push({ x: e.clientX, t: e.timeStamp });
+    if (sw.samples.length > 8) sw.samples.shift();
+    if (!sw.lock) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_LOCK) return;
+      if (Math.abs(dx) > Math.abs(dy) * 1.5) {
+        sw.lock = 'h';
+        markInteract(); // 14장 자동 이동 3분 보류
+        $('panel-schedule').classList.add('is-swiping');
+      } else {
+        sw = null; // 세로 스크롤: 이번 제스처는 무시
+        return;
+      }
+    }
+    if (autoBehavior() === 'auto') return; // reduced-motion: 따라오기 없음
+    var idx = dayIndexOf(state.day);
+    var edge = (dx > 0 && idx <= 0) || (dx < 0 && idx >= DAYS.length - 1);
+    setSwipeX(dx * (edge ? 0.15 : 0.4), 0);
+  }
+  function swipeVelocity(s, e) {
+    var last = { x: e.clientX, t: e.timeStamp };
+    var from = s.samples[0];
+    for (var i = s.samples.length - 1; i >= 0; i--) {
+      from = s.samples[i];
+      if (last.t - s.samples[i].t >= 100) break;
+    }
+    var dt = last.t - from.t;
+    return dt > 0 ? Math.abs(last.x - from.x) / dt : 0;
+  }
+  function onSwipeUp(e) {
+    if (e.pointerType === 'touch') swPointers = Math.max(0, swPointers - 1);
+    if (!sw || e.pointerId !== sw.id) return;
+    var g = sw;
+    sw = null;
+    if (g.lock !== 'h') return; // 10px 미만: 일반 탭(카드 펼치기 클릭 유지)
+    swSuppressClick = Date.now() + 400;
+    var dx = e.clientX - g.x0;
+    var adx = Math.abs(dx);
+    var ok = adx >= SWIPE_DIST || (adx >= SWIPE_MIN && swipeVelocity(g, e) >= SWIPE_VEL);
+    var dir = dx < 0 ? 1 : -1; // 왼쪽으로 밀면 다음 날
+    var idx = dayIndexOf(state.day) + dir;
+    if (!ok || idx < 0 || idx >= DAYS.length) { swipeReset(true); return; } // 미확정·경계: 원위치 (순환 없음, D2)
+    commitSwipe(dir);
+  }
+  function onSwipeCancel(e) {
+    if (e.pointerType === 'touch') swPointers = Math.max(0, swPointers - 1);
+    if (!sw || e.pointerId !== sw.id) return;
+    var wasH = sw.lock === 'h';
+    sw = null;
+    if (wasH) swipeReset(true);
+  }
+  function bindSwipe() {
+    var panel = $('panel-schedule');
+    var opt = { passive: true };
+    panel.addEventListener('pointerdown', onSwipeDown, opt);
+    panel.addEventListener('pointermove', onSwipeMove, opt);
+    // 포인터가 패널 밖에서 떨어져도 정리되도록 window에서 받는다
+    window.addEventListener('pointerup', onSwipeUp, opt);
+    window.addEventListener('pointercancel', onSwipeCancel, opt);
+    window.addEventListener('click', function (e) {
+      if (!swSuppressClick) return;
+      var live = Date.now() < swSuppressClick;
+      swSuppressClick = 0;
+      if (live) { e.stopPropagation(); e.preventDefault(); }
+    }, true);
+  }
+  /** 첫 일정 뷰 진입 시 1회 안내 — 터치 기기만 (spec 16.2 · D5) */
+  function maybeSwipeHint() {
+    var coarse = false;
+    try { coarse = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches); } catch (e) { /* 무시 */ }
+    if (!coarse) return;
+    try {
+      if (window.localStorage.getItem(PREF_SWIPE_HINT) === '1') return;
+      window.localStorage.setItem(PREF_SWIPE_HINT, '1');
+    } catch (e) { return; } // 저장 불가 환경에서는 매번 뜨지 않도록 표시하지 않음
+    var wrap = $('toastWrap');
+    var hint = el('div', { class: 'toast toast-hint', role: 'status' }, [el('span', { text: '← 좌우로 밀어 날짜 이동 →' })]);
+    hint.addEventListener('click', function () { if (hint.parentNode) hint.parentNode.removeChild(hint); });
+    wrap.appendChild(hint);
+    window.setTimeout(function () { if (hint.parentNode) hint.parentNode.removeChild(hint); }, 4000);
+  }
+
   // ---------- 이벤트 ----------
   function tabKeys(e, selector, onPick) {
     var keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
@@ -1635,6 +1813,7 @@
     window.setInterval(function () { tick('timer'); }, 60000);
     bindPrefs();
     bindImgDialog();
+    bindSwipe();
     bindAlarm();
 
     Store.onChange(function (what) { if (what === 'writeFailed') $('storageWarn').hidden = false; });

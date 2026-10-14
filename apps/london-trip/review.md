@@ -250,3 +250,62 @@
 ### 남은 위험(경미)
 - piccadilly 사진은 Commons `Restrictions=trademarked`(광고판 상표 노출). 저작권 라이선스와 별개의 상표 고지로, 비상업 여행 앱 장면 사진 용도에서는 문제 없음.
 - 헤더 GMT 표기는 기존 time.js 형식 `GMT+0`을 그대로 씀(spec 예시는 BST만 명시) — 기존 동작, 변경 안 함.
+
+## v5 사진 기본 펼침 + 일자 스와이프 리뷰
+
+**판정: 통과 (Review 수정 2건 반영)** — 기준: spec 16장 + 16.x 사용자 확정(D1~D6 기본안). 검증: 새 탭 `http://localhost:8000/apps/london-trip/?v=rv5b`, 375×812 다크모드 · 360×780, 합성 `PointerEvent`(pointerType `touch`) 디스패치.
+
+### 코드 리뷰 — 실제 모바일 동작 구조
+- `touch-action: pan-y`면 가로 이동은 브라우저가 패닝하지 않으므로 pointercancel 없이 pointermove/up이 이어진다(Chrome Android·iOS Safari 13+ 모두 Pointer Events·`pan-y` 지원). 세로 이동은 브라우저가 스크롤하며 pointercancel → 앱도 이미 세로로 판정해 `sw=null`이므로 충돌 없음. TouchEvent 경로 보강은 불필요하다고 판단.
+- **문제(수정)**: Build 선언 `touch-action: pan-y pinch-zoom` 한 줄만 있었음. Safari(iOS 포함)는 `pinch-zoom` 값을 지원하지 않아 선언 전체가 무효 → `auto`로 떨어져 가로 제스처 중 pointercancel이 날 수 있음. `touch-action: pan-y; touch-action: pan-y pinch-zoom;` 폴백 순서로 수정(Chrome은 핀치 허용, Safari는 `pan-y` 적용 — iOS에서 패널 위 핀치 확대는 막히지만 spec 16.2 원안이 `pan-y`).
+- `setPointerCapture` 미사용: 터치 포인터는 대상 요소에 암묵 캡처되므로 손가락이 패널 밖으로 나가도 move가 이어짐. pointerup/cancel은 window에서 받아 정리 → 문제 없음.
+- **문제(수정)**: `swPointers` 카운터가 up/cancel 유실(앱 전환 등) 시 1로 굳으면 이후 모든 스와이프가 "두 번째 손가락"으로 판정돼 영구 무시됨. `pointerdown`에서 `e.isPrimary`(화면에 다른 터치 없음)면 0으로 재설정하도록 1줄 추가.
+- 리스너 passive, `preventDefault` 미사용, 리스너는 `bindSwipe()`에서 1회 등록(누수 없음). 타이머는 애니메이션 단발 `setTimeout`만.
+- 클릭 억제: 수평 잠금된 제스처의 up 뒤 400ms 내 첫 click 1회만 먹고, 기한 지나면 첫 click에서 해제만 함 → 정상 탭(10px 미만)은 잠금이 없어 억제 대상 아님.
+
+### Build가 spec과 다르다고 한 점 — 타당성
+- 스와이프 영역이 일정 패널 전체(요약 포함, 알림 패널·설정 제외): 요약 위 스와이프도 자연스럽고, 자체 상호작용 영역은 `SWIPE_IGNORE`로 제외 → 타당. 날짜 탭 줄은 패널 밖 sticky 헤더라 원래 대상 아님.
+- 넘긴 뒤 일정 화면 맨 위(요약부터): D6 "새 날짜 맨 위"와 부합, 요약이 그 날 개요라 타당.
+- 미확정 가로 제스처 뒤에도 클릭 1회 억제: 손을 뗀 위치의 버튼이 잘못 눌리는 것을 막음. 400ms 기한이라 부작용 작음 → 타당.
+- localStorage 불가 시 안내 미표시: 매 진입마다 토스트가 뜨는 것보다 낫다 → 타당.
+
+### 브라우저 검증 (합성 PointerEvent)
+| 시나리오 | 결과 |
+|---|---|
+| dx=-120 / dx=+120 | 다음 날 / 이전 날 |
+| Day 1에서 오른쪽, Day 8에서 왼쪽 | 이동 없음(순환 없음) |
+| dx=40·dy=120(세로 우세) | 불변 |
+| dx=-40 빠르게(2스텝) | 속도 조건으로 확정 |
+| 시작 x=10(가장자리 20px) | 불변 |
+| 두 포인터 동시 / 수평 잠금 후 두 번째 손가락 | 불변, transform 잔재 없음, 이후 단일 스와이프 정상 |
+| `pointerType: mouse` | 무시(D3) |
+| 수평 잠금 후 pointercancel | 불변, transform·`is-swiping` 원복 |
+| 메모 textarea·알림 패널·설정 위 | 무시 |
+| dx=8 탭 후 펼치기 클릭 | 펼쳐짐, 날짜 불변 |
+| 미확정 가로 제스처 직후 체크박스 click | 1회 억제, 다음 click 정상 / 450ms 뒤 click 정상 |
+| reduced-motion(matchMedia 대체) | 따라오기 transform 없음, 즉시 전환 |
+| scrollY 2000에서 스와이프 | 패널 top = sticky 높이+8(125px)로 이동 |
+| 따라오는 중 | `translateX(-96px)`, `scrollWidth = innerWidth`(가로 스크롤 없음) |
+| 안내 토스트 | 첫 진입 1회 `← 좌우로 밀어 날짜 이동 →`, `london-trip:swipeHint='1'`, 재진입 시 미표시 |
+- 날짜 전환 뒤 `#timeline`·`#daySummary` inline transform/opacity 빈 값, 패널 class `panel`만 → 잔재 없음. 날짜 탭 aria-selected 동기화(`selectDay` 재사용).
+
+### 사진 (16.1)
+- Day 6: 접힌 카드 5장에 사진 상시 표시, `width/height`·`loading=lazy`·`aspect-ratio 16/9` → 로드 전후 높이 고정. 캡션 `사진: … · CC BY-SA 4.0 · 출처 ↗` 유지. 펼쳐도 `.place-media` 1개(중복 없음). 🖼 배지 0. 크게 보기 dialog 열림/닫힘 정상.
+- 토글 끔 → 사진·검색 링크 0, 켬 → 복원. 완료 체크 시 사진 opacity .55(카드 본문과 동일).
+
+### 회귀
+- 8개 탭 합계 65행, 여행 전체 금액 문구 동일, data.js·time.js·alarm.js·store.js·places.js·sw.js 무변경.
+- 자동 이동: `2026-10-21T11:00Z` → Day 6 · r50 is-now. 한국 시각 보조 줄 표시.
+- 알림: r46 bell 켬 + `07:20:20Z` → 토스트 "08:50 빅벤 & 국회의사당 관람 · 30분 후 시작".
+- 375/360px `scrollWidth = innerWidth`, 콘솔 에러 0, 외부 요청 0. 블로그 메인 iframe(360px) 로드·가로 스크롤 없음·콘솔 0.
+- 테스트 후 `london-trip:` 키 삭제, `theme`·`2048-*` 유지. 뷰포트·테마 복원.
+
+### 수정 내역 (Review)
+1. `style.css`: `#panel-schedule { touch-action: pan-y; touch-action: pan-y pinch-zoom; }` — Safari 폴백.
+2. `app.js` `onSwipeDown`: `if (e.isPrimary) swPointers = 0;` — 포인터 카운터 고착 방지.
+
+### 남은 위험
+- 실기기(iOS Safari·Android Chrome) 터치 미확인 — 합성 이벤트는 브라우저의 touch-action/pointercancel 판단을 재현하지 못함. 코드상 구조는 표준 패턴.
+- iOS에서는 일정 패널 위 핀치 확대가 막힘(`pan-y`만 적용). 패널 밖·다른 탭은 그대로.
+- 가로/세로 비율 1~1.5 사이 대각선 제스처는 앱도 브라우저도 처리하지 않는 무반응 구간(의도된 보수적 판정).
+- 미확정 가로 제스처 직후 400ms 안의 다른 탭 1회는 억제됨(설계상).
