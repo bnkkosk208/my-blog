@@ -62,11 +62,34 @@
   }
   function nowMs() { return T.now().getTime(); }
 
+  // ---------- 시간 경과 자동 완료 (spec 17) ----------
+  /** 자동 완료 기준 시각: 종료 있으면 종료, 없으면 시작. 둘 다 없으면 null */
+  function doneAt(it) {
+    if (!it) return null;
+    var e = endAt(it);
+    return e !== null ? e : startAt(it);
+  }
+  /** 기준 시각이 지났는가 (토글·해제 기록과 무관) */
+  function isPast(it, now) {
+    var at = doneAt(it);
+    return at !== null && (now === undefined ? nowMs() : now) >= at;
+  }
+  /** 자동 완료로 표시되는가: 수동 완료 아님 && 토글 켬 && 해제 기록 없음 && 숨김 아님 && 지남 */
+  function isAutoDone(it, now) {
+    if (!it || Store.isDone(it.id) || !Store.getAutoDone() || Store.isUndone(it.id)) return false;
+    if (it.orig !== false && Store.isHidden(it.id)) return false;
+    return isPast(it, now);
+  }
+  /** 실제 완료 판정 = 수동 완료 || 자동 완료 */
+  function isDoneEff(it, now) {
+    return !!it && (Store.isDone(it.id) || isAutoDone(it, now));
+  }
+
   /** 울릴 대상: 전역 켜짐 && 항목 켜짐 && 시작 있음 && 숨김 아님 && 완료 아님 */
   function targets() {
     if (!Store.getAlarm().enabled) return [];
     return allItems().filter(function (it) {
-      return Store.isAlarmOn(it.id) && canAlarm(it) && !Store.isHidden(it.id) && !Store.isDone(it.id);
+      return Store.isAlarmOn(it.id) && canAlarm(it) && !Store.isHidden(it.id) && !isDoneEff(it);
     });
   }
 
@@ -324,7 +347,7 @@
       L.push('SUMMARY:' + icsText((it.type === '이동' ? '→ ' : '') + it.title));
       if (it.addresses && it.addresses.length) L.push('LOCATION:' + icsText(it.addresses[0]));
       if (desc.length) L.push('DESCRIPTION:' + icsText(desc.join('\n')));
-      if (Store.isAlarmOn(it.id) && !Store.isDone(it.id)) {
+      if (Store.isAlarmOn(it.id) && !isDoneEff(it)) {
         L.push('BEGIN:VALARM', 'ACTION:DISPLAY', 'TRIGGER:-PT' + Store.alarmLead(it.id) + 'M', 'DESCRIPTION:' + icsText(it.title), 'END:VALARM');
       }
       L.push('END:VEVENT');
@@ -372,6 +395,10 @@
     startAt: startAt,
     alarmAt: alarmAt,
     targets: targets,
+    doneAt: doneAt,
+    isPast: isPast,
+    isAutoDone: isAutoDone,
+    isDoneEff: isDoneEff,
     upcoming: upcoming,
     check: check,
     reschedule: reschedule,

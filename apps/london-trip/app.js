@@ -182,6 +182,12 @@
     });
     return list;
   }
+  // ---------- 완료 판정 (spec 17): 수동 done || 시간 경과 자동 완료 ----------
+  function doneEff(it) { return A ? A.isDoneEff(it) : Store.isDone(it.id); }
+  function autoDoneOf(it) { return A ? A.isAutoDone(it) : false; }
+  function isPastItem(it) { return A ? A.isPast(it) : false; }
+  function doneLabel(it, auto) { return (auto ? '완료(시간 경과 자동): ' : '완료: ') + it.title; }
+
   /** 원본 행의 장소 사진 정보 (custom 일정은 없음) */
   function placeOf(it) {
     return it.orig && Object.prototype.hasOwnProperty.call(PLACES, it.id) ? PLACES[it.id] : null;
@@ -291,7 +297,7 @@
   // ---------- 날짜 탭 ----------
   function dayProgress(date) {
     var items = itemsOf(date);
-    var done = items.filter(function (it) { return Store.isDone(it.id); }).length;
+    var done = items.filter(doneEff).length;
     return done + '/' + items.length;
   }
 
@@ -405,7 +411,9 @@
   function makeCard(it) {
     var cls = 'card ' + (it.type === '이동' ? 't-move' : it.type === '이동/활동' ? 't-mix' : 't-act');
     if (!it.orig) cls += ' custom';
-    if (Store.isDone(it.id)) cls += ' is-done';
+    var auto = autoDoneOf(it);
+    if (auto || Store.isDone(it.id)) cls += ' is-done';
+    if (auto) cls += ' is-auto-done';
     var open = !!state.open[it.id];
     if (open) cls += ' is-open';
     var detailId = 'detail-' + it.id;
@@ -422,10 +430,13 @@
       it.costText ? el('p', { class: 'c-cost', text: '비용(1인) ' + it.costText }) : null,
     ]);
 
-    var cb = el('input', { type: 'checkbox', 'data-id': it.id });
-    cb.checked = Store.isDone(it.id);
-    var check = el('label', { class: 'check', title: '완료 체크' }, [cb, el('span', { class: 'sr-only', text: '완료: ' + it.title })]);
-    var side = el('div', { class: 'c-side' }, [check, A ? makeBell(it) : null]);
+    var cb = el('input', { type: 'checkbox', 'data-id': it.id, 'aria-label': doneLabel(it, auto) });
+    cb.checked = auto || Store.isDone(it.id);
+    var check = el('label', { class: 'check', title: '완료 체크' }, [cb, el('span', { class: 'sr-only', text: doneLabel(it, auto) })]);
+    // 자동 완료 배지: 색 외 구분용 텍스트, 의미는 체크박스 aria-label이 전달 (spec 17.3)
+    var autoTag = el('span', { class: 'auto-tag', text: '자동', 'aria-hidden': 'true', title: '시간이 지나 자동 완료됨' });
+    autoTag.hidden = !auto;
+    var side = el('div', { class: 'c-side' }, [check, autoTag, A ? makeBell(it) : null]);
 
     var details = hasDetails(it);
     var toggle = el('button', {
@@ -630,7 +641,7 @@
     var visibleOrig = items.filter(function (it) { return it.orig; });
     var mine = items.length - visibleOrig.length;
     var cnt = function (t) { return visibleOrig.filter(function (it) { return it.type === t; }).length; };
-    var done = items.filter(function (it) { return Store.isDone(it.id); }).length;
+    var done = items.filter(doneEff).length;
     var resv = all.filter(function (it) { return it.reservation; });
     var booked = resv.filter(function (it) { return Store.isBooked(it.id); }).length;
 
@@ -717,6 +728,30 @@
     applyLive(true);
     $('timeline').classList.toggle('alarms-off', !!A && !Store.getAlarm().enabled);
     alarmRefresh();
+  }
+
+  // ---------- 완료 표시 갱신 (spec 17.3) — 카드 클래스·체크·배지·요약만, DOM 재생성 없음(스크롤 유지) ----------
+  function updateDoneUI(li) {
+    var it = li && li._item;
+    if (!it) return;
+    var auto = autoDoneOf(it);
+    var done = auto || Store.isDone(it.id);
+    li.classList.toggle('is-done', done);
+    li.classList.toggle('is-auto-done', auto);
+    var cb = li.querySelector('.check input[data-id]');
+    if (cb) {
+      cb.checked = done;
+      cb.setAttribute('aria-label', doneLabel(it, auto));
+      var sr = cb.parentNode.querySelector('.sr-only');
+      if (sr) sr.textContent = doneLabel(it, auto);
+    }
+    var tag = li.querySelector('.auto-tag');
+    if (tag) tag.hidden = !auto;
+  }
+  function refreshDone() {
+    Array.prototype.forEach.call($('timeline').querySelectorAll('.card'), updateDoneUI);
+    if (dayInfo(state.day)) renderSummary();
+    updateDayProgress();
   }
 
   // ---------- 진행 중 / 다음 ----------
@@ -888,6 +923,7 @@
   /** 1분 타이머·복귀 공통: 헤더·하이라이트 갱신 → 알림 확인 → 현재 위치 판단 */
   function tick(reason) {
     applyLive(false);
+    refreshDone();
     alarmTick();
     syncToNow(reason);
   }
@@ -1361,8 +1397,9 @@
       try { obj = JSON.parse(String(reader.result)); } catch (e) { obj = null; }
       var res = obj ? Store.importData(obj) : { ok: false, error: 'JSON 파일을 읽을 수 없습니다.' };
       if (!res.ok) { window.alert('가져오기 실패: ' + res.error); return; }
+      syncPrefInputs();
       var c = res.counts;
-      window.alert('가져오기 완료\n완료 ' + c.done + ' · 메모 ' + c.memo + ' · 내 일정 ' + c.custom + ' · 숨김 ' + c.hidden + ' · 예약완료 ' + c.booked + ' · 알림 ' + (c.alarm || 0));
+      window.alert('가져오기 완료\n완료 ' + c.done + ' · 메모 ' + c.memo + ' · 내 일정 ' + c.custom + ' · 숨김 ' + c.hidden + ' · 예약완료 ' + c.booked + ' · 알림 ' + (c.alarm || 0) + ' · 자동완료 해제 ' + (c.undone || 0));
       switchView(state.view);
     };
     reader.onerror = function () { window.alert('파일을 읽지 못했습니다.'); };
@@ -1373,6 +1410,7 @@
   function syncPrefInputs() {
     $('showKst').checked = prefs.kst;
     $('showImg').checked = prefs.img;
+    $('autoDone').checked = Store.getAutoDone();
   }
   function bindPrefs() {
     syncPrefInputs();
@@ -1387,6 +1425,12 @@
       writePref(PREF_IMG, prefs.img);
       renderSchedule();
       announce(prefs.img ? '장소 사진을 표시합니다.' : '장소 사진 표시를 껐습니다.');
+    });
+    $('autoDone').addEventListener('change', function (e) {
+      Store.setAutoDone(e.target.checked);
+      refreshDone();
+      alarmRefresh();
+      announce(e.target.checked ? '시간이 지난 일정을 자동으로 완료 표시합니다.' : '자동 완료를 껐습니다. 직접 체크한 항목만 완료로 표시합니다.');
     });
   }
   function bindImgDialog() {
@@ -1623,9 +1667,17 @@
       var t = e.target;
       if (t.matches('input[type="checkbox"][data-id]')) {
         var id = t.getAttribute('data-id');
-        Store.setDone(id, t.checked);
         var card = $('card-' + id);
-        if (card) card.classList.toggle('is-done', t.checked);
+        if (t.checked) {
+          // 다시 체크 → 해제 기록 삭제 + 수동 완료 (spec 17.2)
+          Store.setUndone(id, false);
+          Store.setDone(id, true);
+        } else {
+          Store.setDone(id, false);
+          // 시간이 지난 항목을 해제 → 다시 자동 체크되지 않도록 기록
+          if (card && isPastItem(card._item)) Store.setUndone(id, true);
+        }
+        if (card) updateDoneUI(card);
         renderSummary();
         updateDayProgress();
         alarmRefresh();
@@ -1726,7 +1778,8 @@
 
     $('resetDayBtn').addEventListener('click', function () {
       var info = dayInfo(state.day);
-      if (!window.confirm(info.label + '의 완료 체크를 모두 해제할까요?')) return;
+      var autoNote = A && Store.getAutoDone() ? '\n(시간이 지난 일정은 자동 완료로 다시 표시됩니다)' : '';
+      if (!window.confirm(info.label + '의 완료 체크를 모두 해제할까요?' + autoNote)) return;
       var ids = originalsOf(state.day).map(function (it) { return it.id; })
         .concat(Store.listCustom(state.day).map(function (c) { return c.id; }));
       Store.resetDone(ids);

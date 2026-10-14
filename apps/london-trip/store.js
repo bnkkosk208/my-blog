@@ -8,6 +8,8 @@
   var PREFIX = 'london-trip:';
   var K = {
     done: PREFIX + 'v1:done',
+    undone: PREFIX + 'v1:undone',       // 자동 완료를 사용자가 해제한 항목 (spec 17.2)
+    autoDone: PREFIX + 'autoDone',      // '1' | '0' (spec 17.4, 기본 켬)
     memo: PREFIX + 'v1:memo',
     custom: PREFIX + 'v1:custom',
     hidden: PREFIX + 'v1:hidden',
@@ -48,7 +50,7 @@
   var listeners = [];
 
   function emptyState() {
-    return { done: {}, memo: {}, custom: [], hidden: {}, booked: {}, lastDay: null, lastView: null, alarm: defaultAlarm(), alarmFired: {} };
+    return { done: {}, undone: {}, autoDone: true, memo: {}, custom: [], hidden: {}, booked: {}, lastDay: null, lastView: null, alarm: defaultAlarm(), alarmFired: {} };
   }
   function isObj(v) { return v !== null && typeof v === 'object' && !Array.isArray(v); }
   function own(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
@@ -182,6 +184,9 @@
 
   function load() {
     state.done = cleanFlagMap(readJSON(K.done), false);
+    state.undone = cleanFlagMap(readJSON(K.undone), false);
+    var ad = rawGet(K.autoDone);
+    state.autoDone = ad === '0' ? false : true;
     state.memo = cleanMemo(readJSON(K.memo));
     state.custom = cleanCustom(readJSON(K.custom));
     state.hidden = cleanFlagMap(readJSON(K.hidden), true);
@@ -232,6 +237,19 @@
       if (!validItemId(id)) return;
       if (on) state.done[id] = true; else delete state.done[id];
       persistMap('done');
+    },
+    // 자동 완료 해제 기록 (spec 17.2)
+    isUndone: function (id) { return state.undone[id] === true; },
+    setUndone: function (id, on) {
+      if (!validItemId(id)) return;
+      if (on) state.undone[id] = true; else delete state.undone[id];
+      persistMap('undone');
+    },
+    // 시간 지난 일정 자동 완료 토글 (spec 17.4)
+    getAutoDone: function () { return state.autoDone; },
+    setAutoDone: function (on) {
+      state.autoDone = !!on;
+      rawSet(K.autoDone, state.autoDone ? '1' : '0');
     },
 
     // 메모
@@ -298,12 +316,14 @@
     removeCustom: function (id) {
       state.custom = state.custom.filter(function (c) { return c.id !== id; });
       delete state.done[id];
+      delete state.undone[id];
       delete state.memo[id];
       var hadAlarm = own(state.alarm.items, id);
       delete state.alarm.items[id];
       delete state.alarmFired[id];
       persistCustom();
       persistMap('done');
+      persistMap('undone');
       persistMap('memo');
       if (hadAlarm) persistAlarm();
       persistFired();
@@ -386,10 +406,11 @@
     },
 
     // 초기화
-    /** 주어진 id들의 완료 체크만 삭제 */
+    /** 주어진 id들의 완료 체크와 자동 완료 해제 기록을 모두 삭제 (spec 17.x E5: 지난 일정은 다시 자동 완료) */
     resetDone: function (ids) {
-      ids.forEach(function (id) { delete state.done[id]; });
+      ids.forEach(function (id) { delete state.done[id]; delete state.undone[id]; });
       persistMap('done');
+      persistMap('undone');
     },
     /** 'london-trip:' 접두사 키를 모두 삭제 */
     resetAll: function () {
@@ -413,6 +434,8 @@
         version: 1,
         exportedAt: new Date().toISOString(),
         done: copy(state.done),
+        undone: copy(state.undone),
+        autoDone: state.autoDone,
         memo: copy(state.memo),
         custom: copy(state.custom),
         hidden: copy(state.hidden),
@@ -424,11 +447,14 @@
     importData: function (obj) {
       if (!isObj(obj) || obj.app !== 'london-trip') return { ok: false, error: '이 앱에서 내보낸 파일이 아닙니다.' };
       var done = cleanFlagMap(obj.done, false);
+      var undone = cleanFlagMap(obj.undone, false); // 없으면 빈 값
       var memo = cleanMemo(obj.memo);
       var custom = cleanCustom(obj.custom);
       var hidden = cleanFlagMap(obj.hidden, true);
       var booked = cleanFlagMap(obj.booked, true);
       Object.keys(done).forEach(function (k) { state.done[k] = true; });
+      Object.keys(undone).forEach(function (k) { if (state.done[k] !== true) state.undone[k] = true; });
+      if (typeof obj.autoDone === 'boolean') this.setAutoDone(obj.autoDone);
       Object.keys(memo).forEach(function (k) { state.memo[k] = memo[k]; });
       Object.keys(hidden).forEach(function (k) { state.hidden[k] = true; });
       Object.keys(booked).forEach(function (k) { state.booked[k] = true; });
@@ -438,7 +464,7 @@
         if (idx < 0) state.custom.push(c);
         else if (c.updatedAt >= state.custom[idx].updatedAt) state.custom[idx] = c;
       });
-      ['done', 'memo', 'hidden', 'booked'].forEach(persistMap);
+      ['done', 'undone', 'memo', 'hidden', 'booked'].forEach(persistMap);
       persistCustom();
       // 알림: 항목만 병합(전역 설정은 덮어쓰지 않음). 사용자 일정 병합 후 검증
       var alarmItems = isObj(obj.alarm) ? cleanAlarmItems(obj.alarm.items, state.alarm.lead) : {};
@@ -447,7 +473,7 @@
       return {
         ok: true,
         counts: {
-          done: Object.keys(done).length, memo: Object.keys(memo).length, custom: custom.length,
+          done: Object.keys(done).length, undone: Object.keys(undone).length, memo: Object.keys(memo).length, custom: custom.length,
           hidden: Object.keys(hidden).length, booked: Object.keys(booked).length,
           alarm: Object.keys(alarmItems).length,
         },

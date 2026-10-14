@@ -501,3 +501,11 @@ a { color: var(--accent); }
 @media (min-width: 600px) {
   .sheet { margin: auto; border-radius: 16px; }
 }
+
+/* ---------- 시간 경과 자동 완료 (v6, spec 17.3) ---------- */
+.auto-tag {
+  margin-top: -6px; padding: 0 5px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--gray-bg); color: var(--gray-text); font-size: 11px; font-weight: 600; line-height: 1.5;
+  white-space: nowrap;
+}
+.auto-tag[hidden] { display: none; }
