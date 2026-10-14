@@ -215,7 +215,12 @@
     </form>
   </dialog>
 
-  <div class="toast-wrap" id="toastWrap"></div>
+  <div class="toast-wrap" id="toastWrap">
+    <!-- 현재 위치에서 벗어났을 때만 표시 (spec 14.4). 토스트가 생기면 그 위로 밀려 올라간다 -->
+    <div class="now-row" id="nowRow" hidden>
+      <button type="button" class="now-btn" id="nowBtn" aria-label="현재 일정으로 이동">지금으로</button>
+    </div>
+  </div>
   <div class="sr-only" id="live" aria-live="polite"></div>
   <div class="sr-only" id="liveAlert" aria-live="assertive"></div>
 </body>

@@ -112,7 +112,7 @@ a { color: var(--accent); }
 
 .noscript { padding: 16px; text-align: center; }
 
-.app { max-width: 560px; margin: 0 auto; padding: 0 16px 48px; }
+.app { max-width: 560px; margin: 0 auto; padding: 0 16px 88px; } /* 하단: 지금으로 버튼에 가리지 않게 */
 
 .muted { color: var(--text-muted); }
 .small { font-size: 13px; }
@@ -430,6 +430,21 @@ a { color: var(--accent); }
 .toast .btn:not(.btn-primary) { background: transparent; color: var(--bg); border-color: var(--bg); }
 @keyframes toast-in { from { transform: translateY(16px); opacity: .3; } to { transform: none; opacity: 1; } }
 .card.flash { animation: flash 1.6s ease-out; }
+
+/* ---------- 지금으로 버튼 (v3, spec 14.4) ---------- */
+.now-row {
+  width: 100%; max-width: 560px; display: flex; justify-content: flex-end; pointer-events: none;
+}
+.now-btn {
+  pointer-events: auto; min-height: 48px; min-width: 48px; padding: 0 18px; border-radius: 999px;
+  border: 2px solid var(--bg); background: var(--accent); color: var(--on-accent);
+  font: inherit; font-size: 15px; font-weight: 700; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 6px; box-shadow: 0 4px 16px rgba(0, 0, 0, .25);
+}
+.now-btn::before {
+  content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: 0 0 auto;
+}
+.now-btn:focus-visible { outline: 3px solid var(--now); outline-offset: 2px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }

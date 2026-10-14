@@ -40,10 +40,12 @@
     open: {},            // 펼친 카드 id
     showHidden: false,
     foodFilter: 'all',
-    autoScrolled: {},    // 날짜별 자동 스크롤 1회
-    userScrolled: false,
     lastLiveKey: '',
+    lastInteract: 0,     // 마지막 사용자 조작 시각(ms, TripTime.now 기준) — 자동 이동 보류용 (spec 14.3)
+    lastTargetKey: '',   // 마지막으로 자동 이동한 대상 'day|itemId'
   };
+  var HOLD_MIN = 3;                 // 조작 후 자동 이동 보류(분) — spec 14.9 B1
+  var AUTO = !!T.supported;         // Intl 미지원 시 자동 이동 전체 끔 (spec 14.1)
   var memoTimers = {};
 
   // ---------- DOM 헬퍼 ----------
@@ -103,10 +105,22 @@
   function shortLabel(d) { // '10/16(금)' -> '10/16', '(금)'
     return { md: d.label.replace(/\(.*$/, ''), dow: '(' + d.dow + ')' };
   }
-  function scrollPageTo(node, offset) {
+  function scrollToY(y, behavior) {
+    if (behavior === 'smooth') {
+      try { window.scrollTo({ top: y, left: 0, behavior: 'smooth' }); return; } catch (e) { /* 구형 브라우저 */ }
+    }
+    window.scrollTo(0, y);
+  }
+  function scrollPageTo(node, offset, behavior) {
     // iframe 안에서 부모 페이지까지 스크롤하지 않도록 scrollIntoView 대신 window.scrollTo 사용
     var top = node.getBoundingClientRect().top + window.pageYOffset - (offset || 0);
-    window.scrollTo(0, Math.max(0, top));
+    scrollToY(Math.max(0, top), behavior);
+  }
+  function autoBehavior() {
+    try {
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return 'auto';
+    } catch (e) { /* 무시 */ }
+    return 'smooth';
   }
   function stickyHeight() { return document.querySelector('.sticky').offsetHeight + 8; }
 
@@ -245,6 +259,7 @@
     centerDayTab();
     state.showHidden = false;
     renderSchedule();
+    updateNowBtnSoon();
   }
 
   // ---------- 일정(타임라인) ----------
@@ -557,7 +572,6 @@
 
     var items = itemsOf(state.day).filter(highlightable);
     var st = T.status(items, lt.minutes);
-    var target = null;
     var names = [];
     st.current.forEach(function (id) {
       var c = $('card-' + id);
@@ -568,7 +582,6 @@
       lb.textContent = '지금';
       lb.classList.add('b-now');
       names.push(c._item.title);
-      if (!target) target = c;
     });
     if (st.next) {
       var n = $('card-' + st.next.id);
@@ -576,7 +589,6 @@
         var nb = n.querySelector('.live-badge');
         nb.textContent = '다음 · ' + st.next.inMin + '분 후';
         nb.classList.add('b-next');
-        target = target || n;
       }
     }
     var key = state.day + '|' + st.current.join(',');
@@ -584,11 +596,136 @@
       if (names.length && !fromRender) announce('지금 진행 중: ' + names.join(', '));
       state.lastLiveKey = key;
     }
-    if (target && state.view === 'schedule' && !state.autoScrolled[state.day] && !state.userScrolled) {
-      state.autoScrolled[state.day] = true;
-      var t = target;
-      window.requestAnimationFrame(function () { scrollPageTo(t, stickyHeight()); });
+  }
+
+  // ---------- 현재 위치 자동 이동 (spec 14) ----------
+  /** 현재 위치: {day, itemId|null, phase} — Intl 미지원이면 null */
+  function currentTarget() {
+    if (!AUTO) return null;
+    var lt = londonInfo();
+    if (!lt) return null;
+    var phase = lt.trip.phase;
+    if (phase === 'after') return { day: LAST, itemId: null, phase: phase };
+    if (phase === 'before') {
+      var first = itemsOf(FIRST);
+      var pick = null;
+      first.forEach(function (it) { if (it.id === 'r02') pick = it; });
+      if (!pick) pick = first.filter(highlightable)[0] || null;
+      return { day: FIRST, itemId: pick ? pick.id : null, phase: phase };
     }
+    var items = itemsOf(lt.date).filter(highlightable);
+    var st = T.status(items, lt.minutes);
+    var id = st.current[0] || (st.next ? st.next.id : null) || (items.length ? items[items.length - 1].id : null);
+    return { day: lt.date, itemId: id, phase: phase };
+  }
+
+  function markInteract() {
+    state.lastInteract = T.now().getTime();
+    updateNowBtnSoon();
+  }
+  function isHeld() {
+    if (!state.lastInteract) return false;
+    return T.now().getTime() - state.lastInteract < HOLD_MIN * 60000;
+  }
+  var NON_TEXT_INPUT = /^(checkbox|radio|button|submit|reset|file|range|color|image)$/i;
+  /** 절대 이동 금지 조건: 입력 중, 바텀시트 열림, 텍스트 선택 중 (spec 14.3) */
+  function isBlocked() {
+    var a = document.activeElement;
+    // 닫힌 dialog 안에 포커스가 남은 경우(포커스 복원 실패)는 입력 중으로 보지 않는다(Review v3)
+    if (a && a !== document.body && !(a.closest && a.closest('dialog:not([open])'))) {
+      var tag = a.tagName;
+      if (a.isContentEditable || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+      if (tag === 'INPUT' && !NON_TEXT_INPUT.test(a.type || '')) return true;
+    }
+    if (dialog && (dialog.open || dialog.hasAttribute('open'))) return true;
+    // 알림 패널(<details>)은 열어 둔 채 둘 수 있으므로 "열림"만으로는 차단하지 않는다(Review v3).
+    // 패널 안 select·입력 포커스는 위 입력 검사로, 패널 클릭·변경은 markInteract 보류로 처리된다.
+    try {
+      var sel = window.getSelection ? window.getSelection() : null;
+      if (sel && !sel.isCollapsed && String(sel).trim()) return true;
+    } catch (e) { /* 무시 */ }
+    return false;
+  }
+  /** 대상 카드가 화면(고정 탭 아래)에 보이는가 */
+  function atPosition(tgt) {
+    if (state.view !== 'schedule' || state.day !== tgt.day) return false;
+    if (!tgt.itemId) return true;
+    var c = $('card-' + tgt.itemId);
+    if (!c) return true;
+    var r = c.getBoundingClientRect();
+    var top = document.querySelector('.sticky').getBoundingClientRect().bottom;
+    return r.bottom > top + 24 && r.top < window.innerHeight - 48;
+  }
+  function removeHash() {
+    if (!window.location.hash || !window.history || !window.history.replaceState) return;
+    try { window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search); } catch (e) { /* 무시 */ }
+  }
+  function flashCard(card) {
+    card.classList.remove('flash');
+    void card.offsetWidth;
+    card.classList.add('flash');
+  }
+  function moveTo(tgt, manual) {
+    if (state.day !== tgt.day) selectDay(tgt.day);
+    removeHash();
+    var behavior = autoBehavior();
+    window.requestAnimationFrame(function () {
+      var card = tgt.itemId ? $('card-' + tgt.itemId) : null;
+      if (card) scrollPageTo(card, stickyHeight(), behavior);
+      else scrollToY(0, behavior);
+      if (manual) {
+        if (card) {
+          flashCard(card);
+          var b = card.querySelector('[data-act="toggle"]');
+          if (b) b.focus({ preventScroll: true });
+        } else {
+          var dt = $('day-' + tgt.day);
+          if (dt) dt.focus({ preventScroll: true });
+        }
+      }
+      updateNowBtnSoon();
+    });
+  }
+  /**
+   * 현재 위치로 이동. reason: 'load' | 'return'(탭·앱 복귀) | 'timer' | 'button'
+   * 반환: 실제로 이동했으면 true
+   */
+  function syncToNow(reason) {
+    var tgt = currentTarget();
+    if (!tgt) { updateNowBtn(); return false; }
+    var manual = reason === 'button';
+    if (!manual && isBlocked()) { updateNowBtn(); return false; }
+    if (reason === 'timer' && isHeld()) { updateNowBtn(); return false; }
+    if (state.view !== 'schedule') {
+      // 다른 뷰: 버튼 또는 여행 중 앱 복귀일 때만 일정 뷰로 전환 (spec 14.5)
+      if (!(manual || (reason === 'return' && tgt.phase === 'during'))) { updateNowBtn(); return false; }
+      switchView('schedule');
+    }
+    var key = tgt.day + '|' + (tgt.itemId || '');
+    if (!manual && reason !== 'load' && key === state.lastTargetKey && atPosition(tgt)) { updateNowBtn(); return false; }
+    state.lastTargetKey = key;
+    if (manual) state.lastInteract = 0;
+    moveTo(tgt, manual);
+    return true;
+  }
+
+  var nowRaf = 0;
+  function updateNowBtn() {
+    var row = $('nowRow');
+    if (!row) return;
+    var tgt = currentTarget();
+    var show = !!tgt && tgt.phase !== 'after' && !atPosition(tgt);
+    if (row.hidden === show) row.hidden = !show;
+  }
+  function updateNowBtnSoon() {
+    if (nowRaf) return;
+    nowRaf = window.requestAnimationFrame(function () { nowRaf = 0; updateNowBtn(); });
+  }
+  /** 1분 타이머·복귀 공통: 헤더·하이라이트 갱신 → 알림 확인 → 현재 위치 판단 */
+  function tick(reason) {
+    applyLive(false);
+    alarmTick();
+    syncToNow(reason);
   }
 
   // ---------- 예약 체크 ----------
@@ -764,6 +901,7 @@
     if (view === 'schedule') { renderSchedule(); centerDayTab(); }
     else if (view === 'booking') renderBooking();
     else if (view === 'food') renderFood();
+    updateNowBtnSoon();
   }
 
   // ---------- 바텀시트(내 일정) ----------
@@ -917,7 +1055,8 @@
       ]),
     ]);
     wrap.appendChild(toast);
-    while (wrap.children.length > 3) wrap.removeChild(wrap.firstChild);
+    var toasts = wrap.querySelectorAll('.toast');
+    for (var i = 0; i < toasts.length - 3; i++) wrap.removeChild(toasts[i]);
     var live = $('liveAlert');
     live.textContent = '';
     window.setTimeout(function () { live.textContent = '알림: ' + texts.join(', '); }, 50);
@@ -928,16 +1067,14 @@
     var it = A ? A.findItem(id) : null;
     if (!it || !dayInfo(it.date)) return;
     state.open[id] = true;
-    state.userScrolled = true;
+    markInteract(); // 알림·해시로 이동한 위치는 사용자 조작으로 간주(보류) — spec 14.6
     if (state.view !== 'schedule') switchView('schedule');
     selectDay(it.date);
     var card = $('card-' + id);
     if (!card) return; // 숨긴 항목
     window.requestAnimationFrame(function () {
       scrollPageTo(card, stickyHeight());
-      card.classList.remove('flash');
-      void card.offsetWidth;
-      card.classList.add('flash');
+      flashCard(card);
       var b = card.querySelector('[data-act="toggle"]');
       if (b) b.focus({ preventScroll: true });
     });
@@ -1076,6 +1213,7 @@
     if (e.key === 'ArrowRight') next = (idx + 1) % tabs.length;
     if (e.key === 'Home') next = 0;
     if (e.key === 'End') next = tabs.length - 1;
+    markInteract();
     onPick(tabs[next]);
   }
 
@@ -1250,20 +1388,38 @@
       var d = parseHash();
       var item = parseHashItem();
       if (item) gotoItem(item);
-      else if (d) { switchView('schedule'); selectDay(d); }
+      else if (d) { markInteract(); switchView('schedule'); selectDay(d); }
     });
 
-    var markScroll = function () { state.userScrolled = true; };
-    window.addEventListener('wheel', markScroll, { passive: true });
-    window.addEventListener('touchmove', markScroll, { passive: true });
+    // 사용자 조작 감지 → 자동 이동 보류 (spec 14.3). 자동 스크롤의 scroll 이벤트는 세지 않는다.
+    window.addEventListener('wheel', markInteract, { passive: true });
+    window.addEventListener('touchmove', markInteract, { passive: true });
     window.addEventListener('keydown', function (e) {
-      if (['PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', ' ', 'End', 'Home'].indexOf(e.key) >= 0) markScroll();
+      if (['PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', ' ', 'End', 'Home'].indexOf(e.key) >= 0) markInteract();
     });
+    var INTERACTIVE = 'button, a, input, select, textarea, label, summary, .card, [role="tab"]';
+    document.addEventListener('click', function (e) {
+      var t = e.target;
+      if (!t || !t.closest || t.closest('#nowRow')) return;
+      if (t.closest(INTERACTIVE)) markInteract();
+    }, true);
+    document.addEventListener('input', markInteract, true);
+    document.addEventListener('change', markInteract, true);
+
+    $('nowBtn').addEventListener('click', function () {
+      state.lastInteract = 0;
+      syncToNow('button');
+    });
+    window.addEventListener('scroll', updateNowBtnSoon, { passive: true });
+    window.addEventListener('resize', updateNowBtnSoon);
 
     document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState === 'visible') { applyLive(false); alarmTick(); }
+      if (document.visibilityState === 'visible') tick('return');
     });
-    window.setInterval(function () { applyLive(false); alarmTick(); }, 60000);
+    window.addEventListener('pageshow', function (e) {
+      if (e.persisted) tick('return'); // bfcache 복귀
+    });
+    window.setInterval(function () { tick('timer'); }, 60000);
     bindAlarm();
 
     Store.onChange(function (what) { if (what === 'writeFailed') $('storageWarn').hidden = false; });
@@ -1289,25 +1445,32 @@
     }
     if (!Store.isPersistent()) $('storageWarn').hidden = false;
 
-    var lt = londonInfo();
+    // 초기 선택 (spec 14가 2.1 ②③을 대체): 해시 > 현재 위치 > (자동 이동 불가 시) lastDay > Day 1
     var hashDay = parseHash();
-    var initial = hashDay ||
-      (lt && lt.trip.phase === 'during' ? lt.date : null) ||
-      Store.getLastDay() ||
-      FIRST;
-    state.day = initial;
-
-    var view = hashDay ? 'schedule' : (Store.getLastView() || 'schedule');
+    var hashItem = parseHashItem();
+    var tgt = currentTarget();
+    state.day = hashDay || (tgt ? tgt.day : null) || Store.getLastDay() || FIRST;
+    // lastView 복원은 여행 중에는 무시, 여행 전·후(및 자동 이동 불가)에는 유지 (spec 14.5)
+    var view = hashDay || (tgt && tgt.phase === 'during') ? 'schedule' : (Store.getLastView() || 'schedule');
 
     renderStatic();
     renderTripTotal();
     renderDayTabs();
     bind();
     switchView(view);
-    var hashItem = parseHashItem();
-    if (hashItem) gotoItem(hashItem);
+    if (hashItem) { markInteract(); gotoItem(hashItem); }
+    else if (hashDay) markInteract();
+    else syncToNow('load');
     alarmTick();
   }
+
+  // 개발·검증용: TripTime.now 고정 후 TripApp.tick('timer') 등으로 타이머 동작을 바로 확인
+  window.TripApp = {
+    tick: tick,
+    syncToNow: syncToNow,
+    currentTarget: currentTarget,
+    HOLD_MIN: HOLD_MIN,
+  };
 
   start();
 })();
