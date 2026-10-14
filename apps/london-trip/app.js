@@ -6,6 +6,7 @@
   var Store = window.TripStore;
   var T = window.TripTime;
   var A = window.TripAlarm || null; // 알림(v2). 없으면 알림 UI만 생략
+  var PLACES = window.TripPlaces || {}; // 장소 사진(v4). 없으면 사진만 생략
   if (!D || !Store || !T) {
     console.error('[london-trip] 필수 스크립트를 불러오지 못했습니다.');
     return;
@@ -28,6 +29,9 @@
       ids[s.id] = true;
       if (!dates[s.date]) errs.push(s.id + ' 날짜 ' + s.date + '가 meta.days에 없음');
     });
+    Object.keys(PLACES).forEach(function (rid) {
+      if (!ids[rid]) errs.push('places.js 행 ' + rid + '가 schedule에 없음');
+    });
     if (errs.length) console.error('[london-trip] 데이터 자가검증 실패:', errs);
   })();
 
@@ -47,6 +51,20 @@
   var HOLD_MIN = 3;                 // 조작 후 자동 이동 보류(분) — spec 14.9 B1
   var AUTO = !!T.supported;         // Intl 미지원 시 자동 이동 전체 끔 (spec 14.1)
   var memoTimers = {};
+
+  // ---------- 표시 설정 (spec 15.1 C1 · 15.x C6) — 'london-trip:' 접두사라 전체 초기화 시 함께 삭제 ----------
+  var PREF_KST = 'london-trip:showKst';
+  var PREF_IMG = 'london-trip:showImg';
+  function readPref(key, def) {
+    try {
+      var v = window.localStorage.getItem(key);
+      return v === '1' ? true : v === '0' ? false : def;
+    } catch (e) { return def; }
+  }
+  function writePref(key, on) {
+    try { window.localStorage.setItem(key, on ? '1' : '0'); } catch (e) { /* 저장 불가: 이 탭에서만 유지 */ }
+  }
+  var prefs = { kst: readPref(PREF_KST, true), img: readPref(PREF_IMG, true) };
 
   // ---------- DOM 헬퍼 ----------
   function $(id) { return document.getElementById(id); }
@@ -164,8 +182,12 @@
     });
     return list;
   }
+  /** 원본 행의 장소 사진 정보 (custom 일정은 없음) */
+  function placeOf(it) {
+    return it.orig && Object.prototype.hasOwnProperty.call(PLACES, it.id) ? PLACES[it.id] : null;
+  }
   function hasDetails(it) {
-    return !!(it.note || it.restaurants.length || it.cafes.length || it.addresses.length);
+    return !!(it.note || it.restaurants.length || it.cafes.length || it.addresses.length || placeOf(it));
   }
   function highlightable(it) {
     return it.tz === 'Europe/London' && it.start !== null;
@@ -179,6 +201,66 @@
     return lt;
   }
 
+  // ---------- 한국 시간 (spec 15.1) ----------
+  var SEOUL = 'Asia/Seoul';
+  function wallMs(f) { // T.format 결과(벽시계)를 비교용 ms로
+    var d = f.date.split('-');
+    var t = f.hhmm.split(':');
+    return Date.UTC(+d[0], +d[1] - 1, +d[2], +t[0], +t[1]);
+  }
+  /** 두 시간대 벽시계 차 → '+8h' (하드코딩 없이 계산하므로 10/25 GMT 전환 후 +9h) */
+  function offsetLabel(fromF, toF) {
+    var h = (wallMs(toF) - wallMs(fromF)) / 3600000;
+    return (h >= 0 ? '+' : '') + (h % 1 ? h.toFixed(1) : String(h)) + 'h';
+  }
+  function daySuffix(n) { return n ? ' ' + (n > 0 ? '+' : '') + n + '일' : ''; }
+  /**
+   * 카드 보조 줄. 반환 {flag, text} 또는 null(표시 생략)
+   * - 런던 행: 🇰🇷 01:50–04:30 +1일 (시작·종료가 모두 있을 때만)
+   * - tz 'mixed'(r02): 시작=한국(부산 출발), 종료=런던(히드로 도착)
+   * - tz 'Asia/Seoul'(r66): 원래 시각이 한국 → 런던 시각으로 역변환
+   */
+  function kstLine(it) {
+    if (it.tz === 'mixed') {
+      if (!it.start) return null;
+      var txt = '한국 ' + it.start + ' 출발';
+      var arr = it.end ? T.toEpoch(it.date, it.end, T.TZ) : null;
+      if (arr !== null) {
+        var fa = T.format(arr, SEOUL);
+        txt += ' · 도착 시 한국 ' + fa.hhmm + daySuffix(T.daysBetween(it.date, fa.date));
+      }
+      return { flag: '', text: txt };
+    }
+    if (it.tz === SEOUL) {
+      var t = it.start || it.end;
+      var ms = t ? T.toEpoch(it.date, t, SEOUL) : null;
+      if (ms === null) return null;
+      var fl = T.format(ms, T.TZ);
+      return { flag: '', text: '런던 ' + fl.hhmm + daySuffix(T.daysBetween(it.date, fl.date)) };
+    }
+    if (!it.start || !it.end) return null;
+    var s = T.toEpoch(it.date, it.start, T.TZ);
+    var e = T.toEpoch(it.date, it.end, T.TZ);
+    if (s === null || e === null) return null;
+    var fs = T.format(s, SEOUL);
+    var fe = T.format(e, SEOUL);
+    var ds = T.daysBetween(it.date, fs.date);
+    var de = T.daysBetween(it.date, fe.date);
+    // 시작·종료의 날짜 차가 같으면 끝에 한 번, 다르면 시작에도 붙인다
+    var startTxt = fs.hhmm + (ds !== de && ds ? '(' + daySuffix(ds).trim() + ')' : '');
+    return { flag: '🇰🇷', text: startTxt + '–' + fe.hhmm + daySuffix(de) };
+  }
+  function kstEl(it) {
+    if (!prefs.kst) return null;
+    var k = kstLine(it);
+    if (!k) return null;
+    return el('div', { class: 'c-kst' }, [
+      k.flag ? el('span', { class: 'kst-flag', 'aria-hidden': 'true', text: k.flag + ' ' }) : null,
+      k.flag ? el('span', { class: 'sr-only', text: '한국 시각 ' }) : null,
+      k.text,
+    ]);
+  }
+
   function renderHeader(lt) {
     var clock = $('clockChip');
     var phase = $('phaseChip');
@@ -187,7 +269,18 @@
       phase.hidden = true;
       return;
     }
-    clock.textContent = '런던 ' + lt.hhmm + (lt.zone ? ' ' + lt.zone : '');
+    // 런던 15:59 BST · 한국 23:59 (+8h) — 좁은 화면에서는 한국 시각이 둘째 줄로 (spec 15.1)
+    var ms = T.now().getTime();
+    var k = T.format(ms, SEOUL);
+    var lParts = clock.querySelector('.clk-l');
+    if (!lParts) {
+      clear(clock);
+      clock.appendChild(el('span', { class: 'clk-l' }));
+      clock.appendChild(el('span', { class: 'clk-k' }));
+      lParts = clock.querySelector('.clk-l');
+    }
+    lParts.textContent = '런던 ' + lt.hhmm + (lt.zone ? ' ' + lt.zone : '');
+    clock.querySelector('.clk-k').textContent = ' · 한국 ' + k.hhmm + ' (' + offsetLabel(T.format(ms, T.TZ), k) + ')';
     phase.hidden = false;
     if (lt.trip.phase === 'during') phase.textContent = '오늘: Day ' + (lt.trip.dayIndex + 1);
     else if (lt.trip.phase === 'before') phase.textContent = 'D-' + lt.trip.dDay;
@@ -286,6 +379,12 @@
     }
     if (!it.orig) box.appendChild(el('span', { class: 'badge b-mine', text: '내 일정' }));
     if (Store.getMemo(it.id)) box.appendChild(el('span', { class: 'badge b-memo', text: '메모' }));
+    if (prefs.img && placeOf(it)) { // 접힌 카드에는 썸네일 대신 표시만 (spec 15.6 C3)
+      box.appendChild(el('span', { class: 'badge b-img', title: '장소 사진 있음 (펼치면 표시)' }, [
+        el('span', { 'aria-hidden': 'true', text: '🖼' }),
+        el('span', { class: 'sr-only', text: '사진 있음' }),
+      ]));
+    }
     if (A && it.start && Store.isAlarmOn(it.id)) {
       box.appendChild(el('span', { class: 'badge b-alarm', text: '🔔 ' + Store.alarmLead(it.id) + '분 전' }));
     }
@@ -322,6 +421,7 @@
     fillBadges(badges, it);
     var main = el('div', { class: 'c-main' }, [
       timeEl,
+      kstEl(it),
       el('p', { class: 'c-title', text: it.title }),
       badges,
       it.costText ? el('p', { class: 'c-cost', text: '비용(1인) ' + it.costText }) : null,
@@ -400,8 +500,79 @@
     return sel;
   }
 
+  // ---------- 장소 사진 (spec 15.4 · 15.x: 앱에 포함된 파일만, 외부 요청 없음) ----------
+  function searchLink(pl) {
+    return el('a', {
+      class: 'img-search', href: 'https://www.google.com/search?tbm=isch&q=' + encodeURIComponent(pl.en + ' London'),
+      target: '_blank', rel: 'noopener noreferrer', text: '이미지 검색 ↗',
+    });
+  }
+  /** 캡션: 사진: {저작자} · {라이선스} · 출처 ↗ */
+  function fillCredit(p, pl) {
+    clear(p);
+    p.appendChild(document.createTextNode('사진: ' + pl.artist + ' · '));
+    p.appendChild(el('a', { href: pl.licenseUrl, target: '_blank', rel: 'noopener noreferrer license', text: pl.license }));
+    p.appendChild(document.createTextNode(' · '));
+    p.appendChild(el('a', { href: pl.source, target: '_blank', rel: 'noopener noreferrer', text: '출처 ↗', title: 'Wikimedia Commons 파일 페이지' }));
+    return p;
+  }
+  function placeBlock(pl) {
+    var wrap = el('div', { class: 'place-media' });
+    if (!prefs.img) {
+      wrap.appendChild(el('p', { class: 'small muted img-off' }, ['사진 표시 꺼짐 · ', searchLink(pl)]));
+      return wrap;
+    }
+    var img = el('img', {
+      src: pl.img, alt: pl.ko + ' 사진', width: String(pl.w), height: String(pl.h), loading: 'lazy', decoding: 'async',
+    });
+    if (pl.pos) img.style.objectPosition = pl.pos;
+    var btn = el('button', { type: 'button', class: 'place-img', 'data-act': 'zoom', 'aria-label': pl.ko + ' 사진 크게 보기' }, [
+      img,
+      el('span', { class: 'zoom-hint', 'aria-hidden': 'true', text: '⤢ 크게 보기' }),
+    ]);
+    var fig = el('figure', { class: 'place-fig' }, [btn, el('figcaption', null, [fillCredit(el('p', { class: 'img-credit' }), pl)])]);
+    img.addEventListener('error', function () { // 파일 누락 등: 사진 영역을 숨기고 검색 링크만
+      fig.hidden = true;
+      wrap.appendChild(el('p', { class: 'small muted img-off' }, ['사진을 불러오지 못했습니다 · ', searchLink(pl)]));
+    });
+    wrap.appendChild(fig);
+    return wrap;
+  }
+
+  var imgDlg = $('imgDialog');
+  var imgOpener = null;
+  function openImg(pl, opener) {
+    if (!imgDlg) return;
+    imgOpener = opener || null;
+    $('imgDialogTitle').textContent = pl.ko;
+    var im = $('imgDialogImg');
+    im.src = pl.img;
+    im.alt = pl.ko + ' 사진';
+    im.width = pl.w;
+    im.height = pl.h;
+    im.hidden = false;
+    fillCredit($('imgDialogCredit'), pl);
+    if (typeof imgDlg.showModal === 'function') imgDlg.showModal();
+    else imgDlg.setAttribute('open', '');
+    $('imgDialogClose').focus();
+  }
+  function closeImg() {
+    if (!imgDlg) return;
+    if (typeof imgDlg.close === 'function' && imgDlg.open) imgDlg.close();
+    else if (imgDlg.hasAttribute('open')) { imgDlg.removeAttribute('open'); onImgClosed(); }
+  }
+  function onImgClosed() {
+    var o = imgOpener;
+    imgOpener = null;
+    if (o && document.body.contains(o)) {
+      try { o.focus({ preventScroll: true }); } catch (e) { o.focus(); }
+    }
+  }
+
   function buildDetail(box, it) {
     clear(box);
+    var pl = placeOf(it);
+    if (pl) box.appendChild(placeBlock(pl));
     if (A && it.start) {
       var lid = 'lead-' + it.id;
       box.appendChild(el('div', { class: 'alarm-row' }, [
@@ -638,6 +809,7 @@
       if (tag === 'INPUT' && !NON_TEXT_INPUT.test(a.type || '')) return true;
     }
     if (dialog && (dialog.open || dialog.hasAttribute('open'))) return true;
+    if (imgDlg && (imgDlg.open || imgDlg.hasAttribute('open'))) return true; // 사진 크게 보기 (spec 15.4)
     // 알림 패널(<details>)은 열어 둔 채 둘 수 있으므로 "열림"만으로는 차단하지 않는다(Review v3).
     // 패널 안 select·입력 포커스는 위 입력 검사로, 패널 클릭·변경은 markInteract 보류로 처리된다.
     try {
@@ -972,6 +1144,11 @@
     var f = T.format(e.at, tz);
     return f.md + ' ' + f.hhmm + (tz === 'Asia/Seoul' ? '(한국)' : '');
   }
+  /** 다가오는 알림 목록용 한국 시각 보조 표기 ' (한국 23:30)' — 이미 한국 시각인 항목은 생략 (spec 15.1) */
+  function kstHint(e) {
+    if (A.startTz(e.item) === SEOUL) return '';
+    return ' (한국 ' + T.format(e.at, SEOUL).hhmm + ')';
+  }
   /** 설정·데이터 변경 후: 다시 예약하고 패널 갱신 */
   function alarmRefresh() {
     if (!A) return;
@@ -1031,7 +1208,7 @@
       var e = r.e;
       ul.appendChild(el('li', null, [el('button', { type: 'button', class: 'up-item', 'data-goto': e.item.id }, [
         r.missed ? el('span', { class: 'badge b-missed', text: '놓침' }) : null,
-        el('span', { class: 'up-time', text: alarmWhen(e) }),
+        el('span', { class: 'up-time', text: alarmWhen(e) + kstHint(e) }),
         el('span', { class: 'up-title', text: e.item.title }),
         el('span', { class: 'up-lead', text: e.lead + '분 전' }),
       ])]));
@@ -1200,6 +1377,36 @@
     reader.readAsText(file);
   }
 
+  // ---------- 표시 설정 스위치 / 사진 크게 보기 ----------
+  function syncPrefInputs() {
+    $('showKst').checked = prefs.kst;
+    $('showImg').checked = prefs.img;
+  }
+  function bindPrefs() {
+    syncPrefInputs();
+    $('showKst').addEventListener('change', function (e) {
+      prefs.kst = e.target.checked;
+      writePref(PREF_KST, prefs.kst);
+      renderSchedule();
+      announce(prefs.kst ? '카드에 한국 시각을 표시합니다.' : '카드의 한국 시각 표시를 껐습니다.');
+    });
+    $('showImg').addEventListener('change', function (e) {
+      prefs.img = e.target.checked;
+      writePref(PREF_IMG, prefs.img);
+      renderSchedule();
+      announce(prefs.img ? '장소 사진을 표시합니다.' : '장소 사진 표시를 껐습니다.');
+    });
+  }
+  function bindImgDialog() {
+    if (!imgDlg) return;
+    $('imgDialogClose').addEventListener('click', closeImg);
+    imgDlg.addEventListener('close', onImgClosed);
+    imgDlg.addEventListener('click', function (e) { if (e.target === imgDlg) closeImg(); }); // 배경 탭
+    imgDlg.addEventListener('keydown', function (e) { // showModal 미지원 브라우저용 Esc
+      if (e.key === 'Escape' && typeof imgDlg.showModal !== 'function') { e.preventDefault(); closeImg(); }
+    });
+  }
+
   // ---------- 이벤트 ----------
   function tabKeys(e, selector, onPick) {
     var keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
@@ -1266,7 +1473,10 @@
         var a = act.getAttribute('data-act');
         var it = li._item;
         if (a === 'toggle') toggleCard(li);
-        else if (a === 'bell') {
+        else if (a === 'zoom') {
+          var zp = placeOf(it);
+          if (zp) openImg(zp, act);
+        } else if (a === 'bell') {
           if (!A || !it.start) return;
           if (Store.getAlarm().sound) A.primeAudio();
           var on = !Store.isAlarmOn(it.id);
@@ -1348,7 +1558,10 @@
     $('resetAllBtn').addEventListener('click', function () {
       if (!window.confirm('완료·메모·내 일정·숨김·예약 체크가 모두 삭제됩니다. 계속할까요?')) return;
       if (!window.confirm('정말 전체 초기화할까요? 되돌릴 수 없습니다. (원본 일정은 그대로 유지됩니다)')) return;
-      Store.resetAll();
+      Store.resetAll(); // 'london-trip:' 키 전체 삭제 → 표시 설정도 기본값(켬)으로
+      prefs.kst = true;
+      prefs.img = true;
+      syncPrefInputs();
       state.open = {};
       state.showHidden = false;
       switchView('schedule');
@@ -1420,6 +1633,8 @@
       if (e.persisted) tick('return'); // bfcache 복귀
     });
     window.setInterval(function () { tick('timer'); }, 60000);
+    bindPrefs();
+    bindImgDialog();
     bindAlarm();
 
     Store.onChange(function (what) { if (what === 'writeFailed') $('storageWarn').hidden = false; });

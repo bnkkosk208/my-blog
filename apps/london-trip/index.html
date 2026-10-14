@@ -19,6 +19,7 @@
   <script src="time.js" defer></script>
   <script src="store.js" defer></script>
   <script src="alarm.js" defer></script>
+  <script src="places.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -106,6 +107,16 @@
         <details class="settings">
           <summary>설정 · 초기화 · 백업</summary>
           <div class="settings-body">
+            <div class="settings-toggles">
+              <label class="switch-row">
+                <input type="checkbox" role="switch" id="showKst">
+                <span>한국 시간 표시 <span class="muted small">(카드 보조 줄 · 헤더는 항상 표시)</span></span>
+              </label>
+              <label class="switch-row">
+                <input type="checkbox" role="switch" id="showImg">
+                <span>장소 이미지 표시 <span class="muted small">(펼친 카드 상단 사진)</span></span>
+              </label>
+            </div>
             <div class="settings-row">
               <button type="button" class="btn btn-small" id="resetDayBtn">이 날 체크 초기화</button>
               <button type="button" class="btn btn-small btn-danger" id="resetAllBtn">전체 초기화</button>
@@ -213,6 +224,18 @@
         <button type="submit" class="btn btn-primary" id="saveBtn">저장</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- 장소 사진 크게 보기 (spec 15.4) -->
+  <dialog class="img-dialog" id="imgDialog" aria-labelledby="imgDialogTitle">
+    <div class="img-dialog-box">
+      <div class="img-dialog-head">
+        <h2 class="img-dialog-title" id="imgDialogTitle"></h2>
+        <button type="button" class="btn btn-small" id="imgDialogClose" aria-label="사진 닫기">닫기 ✕</button>
+      </div>
+      <img class="img-dialog-img" id="imgDialogImg" alt="" decoding="async" hidden>
+      <p class="img-credit" id="imgDialogCredit"></p>
+    </div>
   </dialog>
 
   <div class="toast-wrap" id="toastWrap">

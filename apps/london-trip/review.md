@@ -184,3 +184,69 @@
 - textarea·select에 포커스를 둔 채 화면을 끄거나 방치하면, 포커스가 풀릴 때까지 자동 이동이 멈춘다(spec 14.3 "입력 중 절대 금지" 그대로). "지금으로" 버튼과 다른 곳 탭으로 풀린다.
 - reduced-motion·bfcache(`pageshow` persisted)·실기기 터치 스크롤 중 자동 이동 충돌은 코드로만 확인했다.
 - 테스트 후 `london-trip:` 키를 모두 지웠다(`theme`·`2048-*` 유지).
+
+## v4 한국 시간 + 장소 이미지 리뷰
+검증일 2026-10-14 · 독립 Review 서브에이전트(Build와 분리) · 기준: spec 15장 + **15.x 사용자 확정**(사진 파일 앱 포함, 외부 요청 0 유지, 15.x 우선).
+
+**판정: 통과 (경미 2건 수정).**
+
+### 장소별 라이선스 확인 (Commons API 독립 조회)
+`commons.wikimedia.org/w/api.php?action=query&prop=imageinfo&iiprop=extmetadata|size` (User-Agent 헤더 포함)로 23개 파일 전수 조회. 네트워크 정상. 모든 파일이 존재하고 `LicenseShortName`이 places.js 기록과 일치, `NonFree` 없음 → 전부 자유 라이선스(CC BY / CC BY-SA). 이미지는 Read로 직접 열어 장소 일치·로고/지도/부적절 여부 확인.
+
+| 장소 키 | 위키 제목 | Commons 파일 | 저작자(API Artist) | 라이선스 | 일치 | 내용 확인 | 행 |
+|---|---|---|---|---|---|---|---|
+| notting-hill | Notting_Hill | London_110.jpg | Urban | CC BY-SA 2.5 | O | 노팅힐 Dunworth Mews 골목(설명 "London : Notting Hill") | r09 |
+| portobello | Portobello_Road | Portobello_market.jpg | Alexrk2 | CC BY-SA 3.0 | O | 포토벨로 시장 거리 | r11 |
+| british-museum | British_Museum | British_Museum_from_NE_2.JPG | Ham | CC BY-SA 3.0 | O | 대영박물관 정면 | r13 |
+| national-gallery | National_Gallery | Galería_Nacional,_Londres,…_DD_036.JPG | Diego Delso | CC BY-SA 4.0 | O | 트라팔가 광장 쪽 정면 | r15 |
+| piccadilly | Piccadilly_Circus | Open_Happiness_Piccadilly_Circus_…jpg | Jimmy Baikovicius | CC BY-SA 2.0 | O (Restrictions=trademarked) | 광장 전경(광고판 상표 노출, 로고 이미지 아님) | r17, r21 |
+| soho | Soho | Soho_(1877979497).jpg | Leandro Neumann Ciuffo | CC BY 2.0 | O | 소호 스퀘어 야경 | r19, r34 |
+| borough-market | Borough_Market | London_2018_March_IMG_0663.jpg | Øyvind Holmstad | CC BY-SA 4.0 | O | 시장 내부 | r23 |
+| tower-bridge | Tower_Bridge | Tower_Bridge_at_Dawn.jpg | Fuzzypiggy | CC BY-SA 3.0 | O | 타워브리지 새벽 | r25 |
+| tower-of-london | Tower_of_London | Tower_of_London_from_the_Shard_(8515883950).jpg | [Duncan] from Nottingham, UK | CC BY 2.0 | O | 런던탑 항공 시점 | r26 |
+| tate-modern | Tate_Modern | Tate_Modern_-_Bankside_Power_Station.jpg | Acabashi | CC BY-SA 4.0 | O | 템스강 건너 전경 | r28 |
+| london-eye | London_Eye | London-Eye-2009.JPG | Khamtran | CC BY-SA 3.0 | O | 런던아이 | r30 |
+| covent-garden | Covent_Garden | Covent_Garden_Interior_May_2006_crop.jpg | Diliff (파생: SilkTork) | CC BY 2.5 | O | 마켓 홀 내부 | r32 |
+| richmond-park | Richmond_Park | Ham_Bottom_in_late_November_-_geograph…5214113.jpg | Stefan Czapski | CC BY-SA 2.0 | O | 공원 풍경(골프장 아님, spec대로) | r36 |
+| west-end | West_End_theatre | London_(44761485915).jpg | Pedro Szekely from Los Angeles, USA | CC BY-SA 2.0 | O | 샤프츠베리 애비뉴 극장가 | r43 |
+| big-ben | Big_Ben | Elizabeth_Tower_and_the_north_front_…jpg | Christian David | CC BY-SA 4.0 | O | 엘리자베스 타워 (세로, `pos center 20%`) | r46 |
+| buckingham | Buckingham_Palace | Buckingham_Palace_London_Morning_2020_01_(cropped).jpg | Julian Herzog | CC BY 4.0 | O | 궁전 정면 | r48 |
+| sky-garden | 20_Fenchurch_Street | The_Sky_Garden.jpg | Colin → **© User:Colin / Wikimedia Commons** | CC BY-SA 4.0 | O (수정) | 스카이가든 내부 | r51 |
+| st-pauls | St_Paul's_Cathedral | St_Pauls_aerial_(cropped).jpg | Mark Fosh | CC BY 2.0 | O | 대성당 항공 시점 | r53 |
+| brick-lane | Brick_Lane | Brick_Lane.JPG | ahisgett | CC BY 2.0 | O | 브릭레인 야경 | r54 |
+| kensington-palace | Kensington_Palace | Kensington_Palace,_the_South_Front_-_geograph…287402.jpg | Colin Smith | CC BY-SA 2.0 | O | 남쪽 정면 | r56 |
+| chinatown | Chinatown,_London | London,_China_Town_--_2016_--_4868.jpg | Dietmar Rabich | CC BY-SA 4.0 | O | 차이나타운 패루 | r57 |
+| regent-street | Regent_Street | Regent_Street_2011-04-25.jpg | aurélien. | CC BY-SA 2.0 | O | 리전트 스트리트 | r59 |
+| heathrow | Heathrow_Airport | Heathrow_Airport_010.jpg | Panhard | CC BY 2.5 | O | 공항 항공 시점 | r63, r65 |
+
+- 저작자 지정 표기(`Attribution` 필드)가 있는 파일: national-gallery(Diego Delso), kensington-palace(Colin Smith), chinatown(Dietmar Rabich) → 기록과 동일. sky-garden만 `© User:Colin / Wikimedia Commons`를 요구해 places.js·CREDITS.md를 그 값으로 보정. richmond-park의 Attribution은 "제목 by Stefan Czapski" 형식이라 저작자명 표기로 충분.
+- buckingham의 API Artist는 "Julian Herzog (Website)" — 링크 텍스트 잔여물 정리로 타당.
+- 파일 크기 = places.js `w×h` 23개 모두 일치(JPEG 헤더 직접 파싱). 총 4,237,043 B(4.04 MiB) ≤ 5MB. 장당 최대 253 KB.
+- 매핑 26행 모두 data.js에 존재, 행 제목과 장소 일치(r57 '켄싱턴궁전→차이나타운 이동 및 자유시간'은 활동성 행으로 spec 표대로 매핑).
+
+### 캡션 · CREDITS
+- 펼친 카드·크게 보기 dialog 모두 `사진: {저작자} · {라이선스 링크} · 출처 ↗(Commons 파일 페이지)` 표시. `rel="noopener noreferrer"`, 새 탭. CC BY/BY-SA 표기 요건(저작자·라이선스·출처) 충족.
+- CREDITS.md 23행과 places.js 값(저작자·라이선스·URL·크기·행) 일치.
+
+### 한국 시각
+- `TripTime.now = 2026-10-18T14:59:30Z` → 헤더 `런던 15:59 BST · 한국 23:59 (+8h)`; `2026-10-26T12:00:00Z` → `런던 12:00 GMT+0 · 한국 21:00 (+9h)`(시차는 두 format 결과 차로 계산, 하드코딩 없음).
+- 기기 TZ(Asia/Seoul) 브라우저에서 위 값이 런던 기준으로 정확 → 모든 계산이 `T.format/toEpoch`에 tz를 명시하므로 기기 TZ 무관(코드 확인).
+- 카드: r32 `🇰🇷 01:50–04:30 +1일`, r21 `06:00–07:00 +1일`, r36 `17:00–22:00`(당일), r02 `한국 08:45 출발 · 도착 시 한국 01:20 +1일`, r66 `런던 10:20`(10/23 BST 역변환). 65행 모두 시간 있음 → 65개 보조 줄.
+- 다가오는 알림 목록 `10/21 08:20 (한국 16:20)`. 토스트 본문 불변.
+- 설정 스위치 2종: 끄면 보조 줄 0·사진 0·🖼 배지 0, 펼친 카드엔 `사진 표시 꺼짐 · 이미지 검색 ↗`만(이미지 요청 0). `london-trip:showKst/showImg` '0'/'1' 저장, 다시 켜면 복원.
+
+### 회귀 · 브라우저
+- **새 탭**에서 앱·블로그 메인 iframe 모두 콘솔 0건 → 이전 `about:srcdoc … TripTime is not defined`는 이전 리뷰 잔재로 확정(앱 원인 아님).
+- 일정 8개 탭 합계 65행. data.js·time.js·alarm.js·store.js·sw.js 무변경(git diff) → 금액 불변.
+- 알림: r46 bell 켬 → `alarmAt+20s` tick → 토스트 "08:50 빅벤 & 국회의사당 관람 · 30분 후 시작". 자동 이동: `2026-10-21T11:00Z` → Day 6 · r50 선택. 정상.
+- 사진: 펼치기 전 이미지 요청 0, 펼칠 때 로컬 `img/*.jpg` 1건. 26개 카드 전부 펼쳐 로드 실패 0, **외부 요청 0**. 크게 보기 dialog: 열면 닫기 버튼 포커스, Esc로 닫힘·확대 버튼으로 포커스 복귀, 카드 유지.
+- 375×812 다크모드, 360×780: `scrollWidth = innerWidth`(가로 스크롤 없음), 360px에서 헤더 한국 시각이 둘째 줄로 줄바꿈. 뷰포트·테마 복원.
+- 테스트 후 `london-trip:` 키 삭제, `theme`·`2048-*` 유지.
+
+### 수정 내역 (Review)
+1. `places.js`, `img/CREDITS.md`: sky-garden 저작자를 Commons Attribution 지정값 `© User:Colin / Wikimedia Commons`로 보정(CREDITS 하단에 근거 1줄 추가).
+2. `app.js`: 헤더 한국 시각 텍스트 앞에 공백 추가(`' · 한국 '`) — textContent/스크린리더에서 `BST· 한국`이 붙어 읽히던 문제. 화면 표시는 동일(플렉스 항목 앞 공백은 접힘).
+
+### 남은 위험(경미)
+- piccadilly 사진은 Commons `Restrictions=trademarked`(광고판 상표 노출). 저작권 라이선스와 별개의 상표 고지로, 비상업 여행 앱 장면 사진 용도에서는 문제 없음.
+- 헤더 GMT 표기는 기존 time.js 형식 `GMT+0`을 그대로 씀(spec 예시는 BST만 명시) — 기존 동작, 변경 안 함.

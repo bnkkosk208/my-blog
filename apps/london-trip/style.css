@@ -446,6 +446,48 @@ a { color: var(--accent); }
 }
 .now-btn:focus-visible { outline: 3px solid var(--now); outline-offset: 2px; }
 
+/* ---------- 한국 시간 + 장소 사진 (v4, spec 15) ---------- */
+#clockChip { display: inline-flex; flex-wrap: wrap; column-gap: .35em; border-radius: 12px; max-width: 100%; }
+.clk-l, .clk-k { white-space: nowrap; }
+.clk-k:empty { display: none; }
+.c-kst { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; line-height: 1.4; }
+.card.is-done .c-kst { opacity: .55; }
+.b-img { background: var(--bg-subtle); color: var(--text-muted); padding-left: 6px; padding-right: 6px; }
+
+.place-media { margin: 0 0 8px; }
+.place-fig { margin: 0; }
+.place-img {
+  position: relative; display: block; width: 100%; padding: 0; border: 0; border-radius: 10px; overflow: hidden;
+  aspect-ratio: 16 / 9; background: var(--gray-bg); cursor: zoom-in; /* 로딩 중 16:9 회색 자리 */
+}
+.place-img img {
+  display: block; width: 100%; height: 100%; object-fit: cover; aspect-ratio: 16 / 9;
+}
+.zoom-hint {
+  position: absolute; right: 6px; bottom: 6px; padding: 2px 8px; border-radius: 999px;
+  background: rgba(0, 0, 0, .55); color: #fff; font-size: 12px; line-height: 1.6;
+}
+.img-credit { margin: 4px 0 0; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+.img-credit a { color: inherit; text-decoration: underline; }
+.img-off { margin: 0; }
+.img-search { display: inline-block; padding: 6px 0; }
+.settings-toggles { display: flex; flex-direction: column; align-items: flex-start; margin-bottom: 8px; }
+.settings-toggles .switch-row { font-weight: 600; font-size: 14px; }
+
+.img-dialog {
+  width: calc(100% - 24px); max-width: 960px; padding: 0; border: 0; border-radius: 14px;
+  background: var(--bg); color: var(--text); max-height: 92vh; overflow-y: auto;
+}
+.img-dialog::backdrop { background: rgba(0, 0, 0, .7); }
+.img-dialog-box { padding: 10px 12px max(12px, env(safe-area-inset-bottom)); }
+.img-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.img-dialog-title { margin: 0; font-size: 16px; }
+.img-dialog-head .btn { min-height: 44px; }
+.img-dialog-img {
+  display: block; width: 100%; height: auto; max-height: calc(92vh - 120px); object-fit: contain;
+  border-radius: 8px; background: var(--gray-bg);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }

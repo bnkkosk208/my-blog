@@ -529,3 +529,92 @@ apps/london-trip/
 
 ### 14.x 사용자 확정 (2026-10-14, 승인 완료)
 - B1~B5 → **기본안대로** (보류 3분 / 여행 전 Day 1 r02 / 다른 탭은 버튼만, 앱 복귀 시 일정 탭 전환 / 여행 후 Day 8 맨 위 / 앱 복귀 시 보류 무시).
+
+## 15. 한국 시간 표시 + 장소 이미지 (v4)
+사용자 요구: "한국 시간도 추가해주고, 장소별로 이미지 참고 자료도 추가로 표시해줘." 이 장은 **1장·8장의 '외부 요청 없음' 원칙에 장소 이미지 예외를 추가**하고, 2장 헤더·카드 구성에 아래 요소를 더한다. 나머지는 1~14장 유지.
+
+### 15.1 한국 시간
+- **헤더 시계**: `런던 15:59 BST · 한국 23:59 (+8h)`. 한국 시각은 `TripTime.format(TripTime.now().getTime(), 'Asia/Seoul')`. 시차는 두 `format` 결과(날짜+분)의 차로 계산(하드코딩 금지 — 10/25 GMT 전환 후 +9h 자동). 1분 타이머로 함께 갱신. 360px에서 넘치면 한국 시각을 둘째 줄로.
+- **일정 카드**: 런던 `시작–종료` 아래 보조 줄 `🇰🇷 23:30–01:20 +1일`(작은 회색 글씨). `toEpoch(date, hhmm, 'Europe/London')` → `format(ms, 'Asia/Seoul')`, 한국 날짜가 행 날짜와 다르면 `+1일`(음수면 `-1일`). 종료 없음/시간 없음 행은 표시 생략.
+- **tz가 다른 행**: `tz:"mixed"`(r02)는 시작=한국(부산 출발), 종료=런던(히드로 도착)으로 해석 — 보조 줄 `한국 08:45 출발 · 도착 시 한국 01:20 +1일`. `tz:"Asia/Seoul"`(r66)은 원래 시각이 한국이므로 보조 줄을 `런던 10:20`(역변환)으로 표시. 해석은 Build에서 note·원본으로 확인.
+- **사용자 일정(custom)**: 런던 기준으로 동일 처리.
+- **영향 범위**: 다가오는 알림 목록(app.js `A.upcoming`)에 `(한국 23:30)` 괄호 보조 표기 추가. 토스트·시스템 알림 본문은 변경 없음(짧게 유지). `.ics`는 UTC라 불변. 자동 이동(14장)·상태 계산은 런던 기준 그대로.
+- **토글**: 설정 영역 `한국 시간 표시` 스위치(기본 켬, 헤더는 항상 표시·카드 보조 줄만 on/off) — 사용자 결정 C1.
+
+### 15.2 장소 이미지 — 출처 방식
+| 안 | 장점 | 단점 |
+|---|---|---|
+| ① 런타임 위키백과 REST `https://en.wikipedia.org/api/rest_v1/page/summary/{title}` → `thumbnail.source` | 저장소 용량 0, CORS 허용, 라이선스 명확(위키미디어 공용) | 외부 요청·로밍 데이터, 오프라인 시 없음 |
+| ② 이미지 파일 저장소 포함 | 오프라인 가능 | 저작자 표기 개별 관리, 용량 수 MB 증가 |
+| ③ Google 이미지 검색 링크만 | 구현 최소, 요청 없음 | 앱 안에서 보이지 않음 |
+- **기본안 ①** + 실패 시 ③의 링크(`이미지 검색 ↗`)를 대체 표시. 외부 요청은 위키백과 API·`upload.wikimedia.org` 두 곳만. 사용자 데이터는 보내지 않음(URL에 문서 제목만).
+
+### 15.3 행 → 장소 매핑 (기본: **활동 행만**, 이동 행은 이미지 없음 — 목적지 활동 카드에 이미 표시되므로 데이터 절약)
+| 장소 키 | 위키 제목 후보(en) | 행 id |
+|---|---|---|
+| notting-hill | `Notting_Hill` | r09 |
+| portobello | `Portobello_Road` | r11 |
+| british-museum | `British_Museum` | r13 |
+| national-gallery | `National_Gallery` | r15 |
+| piccadilly | `Piccadilly_Circus` | r17, r21 |
+| soho | `Soho` | r19, r34 |
+| borough-market | `Borough_Market` | r23 |
+| tower-bridge | `Tower_Bridge` | r25 |
+| tower-of-london | `Tower_of_London` | r26 |
+| tate-modern | `Tate_Modern` | r28 |
+| london-eye | `London_Eye` | r30 |
+| covent-garden | `Covent_Garden` | r32 |
+| richmond-park | `Richmond_Park` | r36 (골프장 자체 이미지 아님) |
+| west-end | `West_End_theatre` | r43 |
+| big-ben | `Big_Ben` | r46 |
+| buckingham | `Buckingham_Palace` | r48 |
+| sky-garden | `Sky_Garden` | r51 |
+| st-pauls | `St_Paul's_Cathedral` | r53 |
+| brick-lane | `Brick_Lane` | r54 |
+| kensington-palace | `Kensington_Palace` | r56 |
+| chinatown | `Chinatown,_London` | r57 |
+| regent-street | `Regent_Street` | r59 |
+| heathrow | `Heathrow_Airport` | r63, r65 |
+- 이미지 없음(활동 행): r06 숙소, r07·r20·r37·r41·r58 식사, r33 가이드 투어(장소 미정), r39 휴식, r50 자유시간. 이동 행 전부(r02~r05, r08, r10, … r66) 없음. custom 일정 없음.
+- **Build 필수**: 각 제목을 실제 API로 호출해 200·`thumbnail` 존재를 확인하고, 리다이렉트되면 최종 제목(`titles.canonical`)으로 교체. 없으면 그 행은 ③ 링크만. 확인 결과를 review.md에 표로 남김.
+
+### 15.4 이미지 UI · 동작
+- 위치: **카드 펼친 영역 상단**, 가로 100%·`aspect-ratio:16/9`·`object-fit:cover`·`border-radius`, `<img loading="lazy" decoding="async" alt="{장소 한글명} 사진">`. 아래 캡션 `이미지: Wikipedia/Wikimedia Commons · 문서 보기 ↗`(`content_urls.mobile.page`, `rel="noopener noreferrer"`, 새 탭).
+- 접힌 카드에는 썸네일 없음(기본안, 데이터 절약) — 장소 있는 카드에 작은 🖼 표시만. C3.
+- 요청 시점: 카드를 **처음 펼칠 때만** summary API 호출(`fetch`, 타임아웃 8초, `AbortController`). 이미지 해상도는 `thumbnail.source`(대개 320px 내외)만 사용, `originalimage`는 탭 시 "크게 보기"에서만 로드(`dialog`, 닫기 버튼·Esc·배경 탭).
+- 캐시: localStorage `london-trip:v1:placeImg` = `{ [title]: { src, w, h, page, ts } }`, 30일 TTL, 실패는 `{ fail:true, ts }`로 1시간 재시도 금지. 이미지 바이트는 브라우저 HTTP 캐시에 맡김(sw.js는 fetch 미가로채기 — 유지).
+- 실패/오프라인/차단: 이미지 영역 숨기고 `이미지 검색 ↗`(`https://www.google.com/search?tbm=isch&q={영문 장소명}+London`) 링크만. `img.onerror`도 동일. 레이아웃 흔들림 방지를 위해 로딩 중 16:9 회색 자리(스켈레톤).
+- 데이터 절약: 설정 `장소 이미지 표시` 스위치(기본 켬, `navigator.connection.saveData===true`면 기본 끔). 끄면 요청 0건, 검색 링크만.
+- 다크모드: 캡션·스켈레톤 색은 기존 CSS 변수 사용. 360px에서 가로 스크롤 없음. CSP 없음(추가하지 않음).
+
+### 15.5 파일 범위 · 저장소
+- 신규 `places.js`: `window.TripPlaces = { [rowId]: { key, ko, en, wiki } }` — **data.js는 수정하지 않음**(65행·금액 회귀 위험 차단). `index.html`에 `<script src="places.js">` 추가(app.js 앞).
+- 수정: `app.js`(헤더 시계, 카드 보조 줄, 알림 목록 표기, 이미지 로드·캐시·dialog, 설정 스위치), `style.css`, `index.html`. `time.js`·`alarm.js`·`store.js`·`data.js`·`sw.js` 변경 없음(필요 시 time.js에 헬퍼 추가만 허용).
+- localStorage 추가: `london-trip:v1:placeImg`(캐시), `london-trip:showKst`(`'1'/'0'`), `london-trip:showImg`(`'1'/'0'`). 전체 초기화 시 함께 삭제(접두사 규칙으로 자연 충족).
+
+### 15.6 사용자 결정 필요
+| # | 항목 | 기본안 |
+|---|---|---|
+| C1 | 카드 한국 시각 보조 줄 on/off 토글 | 토글 제공, 기본 켬(헤더는 항상 표시) |
+| C2 | 이미지 출처 방식 | ① 위키백과 런타임 + 실패 시 검색 링크 ('외부 요청 없음' 예외 승인 필요) |
+| C3 | 접힌 카드 작은 썸네일 | 없음(🖼 표시만) |
+| C4 | 이동 행 이미지 | 없음(활동 행만) |
+| C5 | 식당·카페·뮤지컬 극장·골프장 개별 이미지 | 범위 밖(일정 장소만). r43은 `West_End_theatre` 일반 이미지 |
+| C6 | 이미지 기본 표시 | 켬, 단 기기 데이터 절약 모드면 끔 |
+
+### 15.7 완료 기준 (Review 체크리스트)
+- [ ] `TripTime.now = function(){ return new Date('2026-10-18T14:59:30Z'); }` → 헤더 `런던 15:59 · 한국 23:59 (+8h)`; 기기 TZ를 바꿔도(또는 다른 TZ 브라우저) 동일
+- [ ] r32(17:50–20:30) 보조 줄 `01:50–04:30 +1일`, r02·r66 특수 표기 정확, `now`를 `2026-10-26T12:00:00Z`로 두면 `+9h`
+- [ ] places.js 매핑 전 행 검사: 매핑 id가 모두 data.js에 존재, 표의 23개 장소 제목이 API 200 + thumbnail(또는 검색 링크 대체 확인)
+- [ ] 펼치기 전 네트워크 요청 0건, 펼칠 때 1건, 재펼침·새로고침 시 캐시 사용; 오프라인/요청 차단 시 검색 링크만·콘솔 에러 없음
+- [ ] 이미지 alt·출처 캡션·크게 보기 dialog(Esc·포커스 복귀), 다크모드, 360px 가로 스크롤 없음
+- [ ] 설정 스위치 2종 동작·저장, 이미지 끔 시 요청 0건
+- [ ] 회귀: 65행 표시, 금액 합계 불변, 알림 예약·토스트·.ics 불변, 14장 자동 이동 정상, iframe(블로그 메인)에서 정상
+- [ ] `apps/london-trip/` 밖 변경 없음
+
+### 15.x 사용자 확정 (2026-10-14, 승인 완료)
+- **C2 → 사진 파일을 앱에 포함** (런타임 위키백과 요청 방식 대체). 15장의 런타임 API·localStorage 캐시(`v1:placeImg`)·데이터 절약 모드 관련 규칙은 적용하지 않는다. 앱은 계속 **외부 요청 없음** 원칙 유지.
+  - Build 단계에서 Wikimedia Commons(위키백과 문서 대표 이미지 우선)의 **자유 라이선스**(CC BY, CC BY-SA, CC0, Public Domain) 이미지만 내려받아 `apps/london-trip/img/`에 저장. 가로 960px 이하 JPEG(또는 원본 형식), 장당 약 250KB 이하 목표, 총 5MB 이하.
+  - 각 이미지의 출처 URL(Commons 파일 페이지), 저작자, 라이선스명·URL을 `places.js`에 기록하고 이미지 아래 캡션으로 표시(CC BY/BY-SA 저작자 표기 의무 충족). 크레딧 전체 목록을 `img/CREDITS.md`에도 기록.
+  - 라이선스 확인이 안 되거나 비자유 이미지면 그 장소는 이미지 없이 구글 이미지 검색 링크만.
+- C1·C3·C4·C5 → 기본안대로. C6(이미지 기본 표시) → 켬, 끄기 토글 유지(데이터 절약 모드 자동 끔은 불필요).
