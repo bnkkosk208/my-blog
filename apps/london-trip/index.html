@@ -20,6 +20,7 @@
   <script src="store.js" defer></script>
   <script src="alarm.js" defer></script>
   <script src="places.js" defer></script>
+  <script src="weather.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -120,6 +121,10 @@
                 <input type="checkbox" role="switch" id="autoDone">
                 <span>시간 지난 일정 자동 완료 <span class="muted small">(종료 시각이 지나면 ‘자동’ 체크 · 해제하면 유지)</span></span>
               </label>
+              <label class="switch-row">
+                <input type="checkbox" role="switch" id="weatherOn">
+                <span>날씨 예보 표시 <span class="muted small">(런던 일 단위 · 끄면 요청하지 않음)</span></span>
+              </label>
             </div>
             <div class="settings-row">
               <button type="button" class="btn btn-small" id="resetDayBtn">이 날 체크 초기화</button>
@@ -131,6 +136,7 @@
               <input type="file" id="importFile" accept="application/json,.json" hidden>
             </div>
             <p class="muted small">완료·메모·내 일정은 이 브라우저(localStorage)에만 저장되며 서버로 전송되지 않습니다. 기기를 바꿀 때 내보내기/가져오기를 사용하세요.</p>
+            <p class="muted small">날씨 예보는 런던 고정 좌표로 Open-Meteo에만 요청하며 개인정보·위치는 보내지 않습니다. <a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Weather data by Open-Meteo.com</a> (<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>)</p>
           </div>
         </details>
       </section>

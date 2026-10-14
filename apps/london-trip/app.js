@@ -7,6 +7,7 @@
   var T = window.TripTime;
   var A = window.TripAlarm || null; // 알림(v2). 없으면 알림 UI만 생략
   var PLACES = window.TripPlaces || {}; // 장소 사진(v4). 없으면 사진만 생략
+  var W = window.TripWeather || null;   // 날씨 예보(v7). 없거나 실패해도 나머지 기능은 그대로
   if (!D || !Store || !T) {
     console.error('[london-trip] 필수 스크립트를 불러오지 못했습니다.');
     return;
@@ -314,11 +315,90 @@
         el('span', { class: 'd-no', text: 'Day ' + d.dayNo }),
         el('span', { text: lbl.md + ' ' + lbl.dow }),
         el('span', { class: 'd-prog', text: dayProgress(d.date), 'aria-label': '완료 ' + dayProgress(d.date) }),
+        el('span', { class: 'd-wx', hidden: true }),
       ]);
       wrap.appendChild(b);
     });
     markTodayTab(londonInfo());
+    renderTabWeather();
     centerDayTab();
+  }
+
+  // ---------- 날씨 (spec 18) — 응답 값은 모두 textContent로만 렌더 ----------
+  function deg(v) { return String(Math.round(v) || 0) + '°'; }
+  function wxOf(date) {
+    if (!W) return null;
+    try { return W.get(date); } catch (e) { return null; }
+  }
+  /** 날짜 탭 한 줄: '🌧 14°/9°' (탭 폭이 넘치면 최저 생략) */
+  function renderTabWeather() {
+    var wrap = $('dayTabs');
+    var visible = !wrap.hidden && wrap.offsetParent !== null;
+    DAYS.forEach(function (d) {
+      var t = $('day-' + d.date);
+      var box = t && t.querySelector('.d-wx');
+      if (!box) return;
+      var w = wxOf(d.date);
+      clear(box);
+      t.classList.toggle('has-wx', !!w);
+      box.classList.toggle('wx-past', !!(w && w.past));
+      if (!w) { box.hidden = true; return; }
+      box.hidden = false;
+      box.appendChild(el('span', { 'aria-hidden': 'true', text: w.emoji + ' ' + deg(w.max) }));
+      var minEl = el('span', { class: 'wx-min', 'aria-hidden': 'true', text: '/' + deg(w.min) });
+      box.appendChild(minEl);
+      box.appendChild(el('span', {
+        class: 'sr-only',
+        text: (w.past ? '지난 예보 ' : '') + w.text + ', 최고 ' + Math.round(w.max) + '도 최저 ' + Math.round(w.min) + '도',
+      }));
+      if (visible && box.scrollWidth > box.clientWidth + 1) minEl.hidden = true;
+    });
+  }
+  function fmtUpdated(ms) {
+    var l = T.format(ms, T.TZ);
+    var k = T.format(ms, SEOUL);
+    var today = londonInfo();
+    var md = function (f) { var p = f.date.split('-'); return +p[1] + '/' + +p[2] + ' '; };
+    var showDate = !today || today.date !== l.date;
+    return '업데이트 런던 ' + (showDate ? md(l) : '') + l.hhmm + ' · 한국 ' + (k.date !== l.date || showDate ? md(k) : '') + k.hhmm;
+  }
+  /** 일자 요약 카드 하단 날씨 블록. 표시할 값이 없으면 null(영역 숨김) */
+  function weatherBlock(date) {
+    var w = wxOf(date);
+    if (!w) return null;
+    var parts = [w.text, '최고 ' + deg(w.max) + ' / 최저 ' + deg(w.min)];
+    if (w.pop !== null) parts.push('강수 ' + Math.round(w.pop) + '%');
+    var box = el('div', { class: 's-wx' + (w.past ? ' wx-past' : ''), role: 'group', 'aria-label': '날씨 예보' });
+    box.appendChild(el('p', { class: 's-wx-main' }, [
+      el('span', { 'aria-hidden': 'true', text: w.emoji + ' ' }),
+      parts.join(' · ') + (w.past ? ' (지난 예보)' : ''),
+    ]));
+    if (!w.past && w.pop !== null && w.pop >= 50) box.appendChild(el('p', { class: 's-wx-umb', text: '☂ 우산 챙기세요' }));
+    var at = W.fetchedAt();
+    box.appendChild(el('p', { class: 's-wx-foot' }, [at ? fmtUpdated(at) + ' · ' : '', el('a', {
+      href: 'https://open-meteo.com/', target: '_blank', rel: 'noopener noreferrer', text: 'Weather data by Open-Meteo.com',
+    })]));
+    return box;
+  }
+  function onWeatherUpdate() {
+    // 비동기 응답으로 탭(56→68px)·요약 높이가 바뀌어도 보던 카드가 밀리지 않게 위치 고정 (Review v7)
+    var sticky = document.querySelector('.sticky');
+    var anchor = null;
+    var before = 0;
+    if (state.view === 'schedule' && window.pageYOffset > 0 && sticky) {
+      var line = sticky.getBoundingClientRect().bottom;
+      var cards = document.querySelectorAll('#panel-schedule .card, #panel-schedule .settings');
+      for (var i = 0; i < cards.length; i++) {
+        if (cards[i].getBoundingClientRect().bottom > line) { anchor = cards[i]; break; }
+      }
+      if (anchor) before = anchor.getBoundingClientRect().top - line;
+    }
+    renderTabWeather();
+    if (state.view === 'schedule' && dayInfo(state.day)) renderSummary();
+    if (anchor && anchor.isConnected) {
+      var delta = anchor.getBoundingClientRect().top - sticky.getBoundingClientRect().bottom - before;
+      if (Math.abs(delta) >= 1) window.scrollTo(0, window.pageYOffset + delta);
+    }
   }
   function updateDayProgress() {
     DAYS.forEach(function (d) {
@@ -685,6 +765,8 @@
     box.appendChild(el('p', { text: statParts.join(' · ') }));
     box.appendChild(el('p', { text: '예상 교통비 ' + transportText }));
     box.appendChild(el('p', { text: '예상 입장·이용료 ' + feeText }));
+    var wx = weatherBlock(date);
+    if (wx) box.appendChild(wx);
   }
 
   function renderTripTotal() {
@@ -924,6 +1006,7 @@
   function tick(reason) {
     applyLive(false);
     refreshDone();
+    renderTabWeather(); // 날짜가 바뀌면 지난 날짜 흐림 처리 (요청 없음)
     alarmTick();
     syncToNow(reason);
   }
@@ -1098,7 +1181,7 @@
       $('panel-' + v).hidden = !sel;
     });
     $('dayTabs').hidden = view !== 'schedule';
-    if (view === 'schedule') { renderSchedule(); centerDayTab(); maybeSwipeHint(); }
+    if (view === 'schedule') { renderSchedule(); renderTabWeather(); centerDayTab(); maybeSwipeHint(); }
     else if (view === 'booking') renderBooking();
     else if (view === 'food') renderFood();
     updateNowBtnSoon();
@@ -1411,6 +1494,8 @@
     $('showKst').checked = prefs.kst;
     $('showImg').checked = prefs.img;
     $('autoDone').checked = Store.getAutoDone();
+    $('weatherOn').checked = !!W && W.isOn();
+    $('weatherOn').disabled = !W;
   }
   function bindPrefs() {
     syncPrefInputs();
@@ -1431,6 +1516,12 @@
       refreshDone();
       alarmRefresh();
       announce(e.target.checked ? '시간이 지난 일정을 자동으로 완료 표시합니다.' : '자동 완료를 껐습니다. 직접 체크한 항목만 완료로 표시합니다.');
+    });
+    $('weatherOn').addEventListener('change', function (e) {
+      if (!W) return;
+      W.setOn(e.target.checked); // 켜면 TTL 검사 후 필요할 때만 요청, 끄면 요청 없음
+      onWeatherUpdate();
+      announce(e.target.checked ? '날씨 예보를 표시합니다.' : '날씨 예보 표시를 껐습니다.');
     });
   }
   function bindImgDialog() {
@@ -1789,13 +1880,15 @@
     $('resetAllBtn').addEventListener('click', function () {
       if (!window.confirm('완료·메모·내 일정·숨김·예약 체크가 모두 삭제됩니다. 계속할까요?')) return;
       if (!window.confirm('정말 전체 초기화할까요? 되돌릴 수 없습니다. (원본 일정은 그대로 유지됩니다)')) return;
-      Store.resetAll(); // 'london-trip:' 키 전체 삭제 → 표시 설정도 기본값(켬)으로
+      Store.resetAll(); // 'london-trip:' 키 전체 삭제 → 표시 설정도 기본값(켬)으로 (날씨 캐시·토글 포함)
       prefs.kst = true;
       prefs.img = true;
+      if (W) W.reset();
       syncPrefInputs();
       state.open = {};
       state.showHidden = false;
       switchView('schedule');
+      if (W) W.refresh();
       announce('전체 초기화했습니다.');
     });
     $('exportBtn').addEventListener('click', exportData);
@@ -1858,7 +1951,10 @@
     window.addEventListener('resize', updateNowBtnSoon);
 
     document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState === 'visible') tick('return');
+      if (document.visibilityState === 'visible') {
+        tick('return');
+        if (W) W.refresh(); // 복귀 시에만 TTL 재검사 (1분 tick에서는 요청하지 않음)
+      }
     });
     window.addEventListener('pageshow', function (e) {
       if (e.persisted) tick('return'); // bfcache 복귀
@@ -1909,6 +2005,10 @@
     else if (hashDay) markInteract();
     else syncToNow('load');
     alarmTick();
+    if (W) {
+      W.onUpdate(onWeatherUpdate);
+      W.refresh(); // 캐시는 이미 즉시 렌더됨. TTL 경과 & 온라인일 때만 백그라운드 요청
+    }
   }
 
   // 개발·검증용: TripTime.now 고정 후 TripApp.tick('timer') 등으로 타이머 동작을 바로 확인
