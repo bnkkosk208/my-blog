@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="런던 여행 7박 8일 시간대별 일정관리 — 완료 체크, 메모, 내 일정 추가, 런던 현지 시각 기준 진행 중 항목 표시">
+  <title>런던 여행 일정</title>
+  <script>
+    /* 블로그 테마 값(localStorage.theme)을 읽기만 한다 */
+    (function () {
+      try {
+        var t = localStorage.getItem('theme');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="style.css">
+  <script src="data.js" defer></script>
+  <script src="time.js" defer></script>
+  <script src="store.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <noscript><p class="noscript">이 앱을 사용하려면 JavaScript가 필요합니다.</p></noscript>
+
+  <div class="app">
+    <header class="header">
+      <div class="header-row">
+        <h1 class="title">런던 여행 일정</h1>
+        <a class="open-new" id="openNew" href="./index.html" target="_blank" rel="noopener" hidden>새 창에서 열기 ↗</a>
+      </div>
+      <p class="subtitle">10/16–10/23 · 7박 8일</p>
+      <div class="chips">
+        <span class="chip" id="clockChip">런던 --:--</span>
+        <span class="chip chip-strong" id="phaseChip" hidden></span>
+      </div>
+      <p class="storage-warn" id="storageWarn" role="status" hidden>이 브라우저에서는 저장되지 않습니다. 체크·메모는 새로고침하면 사라집니다.</p>
+    </header>
+
+    <div class="sticky">
+      <nav class="view-tabs" role="tablist" aria-label="화면 선택" id="viewTabs">
+        <button type="button" role="tab" id="tab-schedule" data-view="schedule" aria-controls="panel-schedule" aria-selected="true">일정</button>
+        <button type="button" role="tab" id="tab-booking" data-view="booking" aria-controls="panel-booking" aria-selected="false" tabindex="-1">예약 체크</button>
+        <button type="button" role="tab" id="tab-food" data-view="food" aria-controls="panel-food" aria-selected="false" tabindex="-1">식당</button>
+        <button type="button" role="tab" id="tab-musical" data-view="musical" aria-controls="panel-musical" aria-selected="false" tabindex="-1">뮤지컬</button>
+        <button type="button" role="tab" id="tab-golf" data-view="golf" aria-controls="panel-golf" aria-selected="false" tabindex="-1">골프</button>
+      </nav>
+      <div class="day-tabs" role="tablist" aria-label="날짜 선택" id="dayTabs"></div>
+    </div>
+
+    <main>
+      <!-- 일정 -->
+      <section class="panel" id="panel-schedule" role="tabpanel" aria-labelledby="tab-schedule">
+        <div class="summary" id="daySummary" aria-label="일자 요약"></div>
+        <ol class="timeline" id="timeline" aria-label="시간대별 일정"></ol>
+        <div class="hidden-rows" id="hiddenRows" hidden>
+          <button type="button" class="btn btn-ghost btn-small" id="hiddenToggle" aria-expanded="false" aria-controls="hiddenList"></button>
+          <ul class="hidden-list" id="hiddenList" hidden></ul>
+        </div>
+        <button type="button" class="btn btn-add" id="addBtn">+ 내 일정 추가</button>
+
+        <p class="trip-total" id="tripTotal"></p>
+
+        <details class="settings">
+          <summary>설정 · 초기화 · 백업</summary>
+          <div class="settings-body">
+            <div class="settings-row">
+              <button type="button" class="btn btn-small" id="resetDayBtn">이 날 체크 초기화</button>
+              <button type="button" class="btn btn-small btn-danger" id="resetAllBtn">전체 초기화</button>
+            </div>
+            <div class="settings-row">
+              <button type="button" class="btn btn-small" id="exportBtn">내보내기 (JSON)</button>
+              <button type="button" class="btn btn-small" id="importBtn">가져오기</button>
+              <input type="file" id="importFile" accept="application/json,.json" hidden>
+            </div>
+            <p class="muted small">완료·메모·내 일정은 이 브라우저(localStorage)에만 저장되며 서버로 전송되지 않습니다. 기기를 바꿀 때 내보내기/가져오기를 사용하세요.</p>
+          </div>
+        </details>
+      </section>
+
+      <!-- 예약 체크 -->
+      <section class="panel" id="panel-booking" role="tabpanel" aria-labelledby="tab-booking" hidden>
+        <h2 class="panel-title">예약 체크리스트 <span class="progress" id="bookingProgress"></span></h2>
+        <p class="muted small">일정표에서 ‘예약필요’로 표시된 항목입니다. 예약을 마치면 체크하세요.</p>
+        <ul class="card-list" id="bookingList"></ul>
+        <div class="info-box" id="bookingFoodInfo"></div>
+      </section>
+
+      <!-- 식당 -->
+      <section class="panel" id="panel-food" role="tabpanel" aria-labelledby="tab-food" hidden>
+        <h2 class="panel-title">식당 예약방법</h2>
+        <div class="filters" id="foodFilters" role="group" aria-label="예약 여부 필터">
+          <button type="button" class="filter" data-filter="all" aria-pressed="true">전체</button>
+          <button type="button" class="filter" data-filter="bookable" aria-pressed="false">예약 가능</button>
+          <button type="button" class="filter" data-filter="walkin" aria-pressed="false">워크인</button>
+        </div>
+        <div id="foodList"></div>
+        <div class="notes">
+          <h3 class="notes-title">※ 참고 안내</h3>
+          <ul id="foodNotes"></ul>
+        </div>
+      </section>
+
+      <!-- 뮤지컬 -->
+      <section class="panel" id="panel-musical" role="tabpanel" aria-labelledby="tab-musical" hidden>
+        <h2 class="panel-title">뮤지컬 추천</h2>
+        <ul class="card-list" id="musicalList"></ul>
+        <div class="notes">
+          <h3 class="notes-title">※ 예약 방법 &amp; 팁</h3>
+          <ul id="musicalTips"></ul>
+          <div class="annot" role="note">
+            <strong>일정표상 관람일: 10/20(화) 19:00~21:30</strong>
+            <span>위 4번 팁의 ‘10/19(월)’은 원문 표기입니다. 일정표에는 10/20(화) 웨스트엔드 뮤지컬 관람으로 들어 있습니다.</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 골프 -->
+      <section class="panel" id="panel-golf" role="tabpanel" aria-labelledby="tab-golf" hidden>
+        <h2 class="panel-title">골프장 추천</h2>
+        <ul class="card-list" id="golfList"></ul>
+        <div class="notes">
+          <h3 class="notes-title">※ 참고 안내</h3>
+          <ul id="golfNotes"></ul>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 내 일정 추가/수정 -->
+  <dialog class="sheet" id="itemDialog" aria-labelledby="dialogTitle">
+    <form id="itemForm" method="dialog" novalidate>
+      <h2 class="sheet-title" id="dialogTitle">내 일정 추가</h2>
+      <p class="muted small" id="dialogDate"></p>
+      <div class="form-grid">
+        <label class="field">
+          <span>시작 <em class="req">*</em></span>
+          <input type="time" name="start" id="fStart" required>
+        </label>
+        <label class="field">
+          <span>종료</span>
+          <input type="time" name="end" id="fEnd">
+        </label>
+      </div>
+      <fieldset class="field">
+        <legend>구분</legend>
+        <div class="seg">
+          <label><input type="radio" name="type" value="활동" checked> 활동</label>
+          <label><input type="radio" name="type" value="이동"> 이동</label>
+        </div>
+      </fieldset>
+      <label class="field">
+        <span>내용 <em class="req">*</em></span>
+        <input type="text" name="title" id="fTitle" maxlength="200" required autocomplete="off">
+      </label>
+      <label class="field">
+        <span>이동수단</span>
+        <input type="text" name="transport" id="fTransport" maxlength="200" autocomplete="off">
+      </label>
+      <label class="field">
+        <span>비용</span>
+        <input type="text" name="costText" id="fCost" maxlength="200" autocomplete="off" placeholder="예: £5">
+      </label>
+      <label class="field">
+        <span>메모</span>
+        <textarea name="memo" id="fMemo" rows="3" maxlength="2000"></textarea>
+      </label>
+      <p class="form-error" id="formError" role="alert"></p>
+      <div class="sheet-actions">
+        <button type="button" class="btn" id="cancelBtn">취소</button>
+        <button type="submit" class="btn btn-primary" id="saveBtn">저장</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="sr-only" id="live" aria-live="polite"></div>
+</body>
+</html>
