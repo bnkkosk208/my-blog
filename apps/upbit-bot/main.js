@@ -302,11 +302,16 @@ function renderTicker(prev) {
   }
 }
 
-function onFeedStatus(s) {
+function onFeedStatus(s, info = {}) {
   const [text, cls] = FEED_TEXT[s] || FEED_TEXT.connecting;
   const chip = $('feed-chip');
   chip.textContent = text;
   chip.className = `chip ${cls}`;
+  // 끊긴 이유를 칩에 붙여 원인을 바로 알 수 있게 한다(눌러서 즉시 재연결)
+  const why = (s === 'polling' || s === 'offline') && info.reason ? info.reason : '';
+  chip.title = why ? `원인: ${why} · 눌러서 다시 연결` : '';
+  $('feed-reason').textContent = s === 'offline' && why ? `원인: ${why} — 칩을 누르면 바로 다시 연결합니다` : '';
+  if (why) console.warn('[시세]', s, why);
 }
 
 // ---------- 캔들 데이터 ----------
@@ -1050,6 +1055,9 @@ function initLifecycle() {
       e.returnValue = '봇이 실행 중입니다. 닫으면 멈춥니다.';
     }
   });
+  // 인터넷이 다시 연결되면 기다리지 않고 바로 재연결
+  window.addEventListener('online', () => feed.reconnectNow());
+  $('feed-chip').addEventListener('click', () => feed.reconnectNow());
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
     feed.reconnectNow();

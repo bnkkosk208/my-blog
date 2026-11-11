@@ -6,9 +6,9 @@ import { normalizeCandles } from './candles.js';
 export const UPBIT_REST = 'https://api.upbit.com/v1';
 export const UPBIT_WS = 'wss://api.upbit.com/websocket/v1';
 export const RATE_PER_SEC = 5; // 알려진 시세 한도(초당 10회)의 절반
-export const WS_PING_MS = 60000;
+export const WS_PING_MS = 30000;
 export const POLL_MS = 2000;
-export const WS_BACKOFF_MAX_MS = 30000;
+export const WS_BACKOFF_MAX_MS = 10000;
 
 export class UpbitError extends Error {
   constructor(message, status = 0, code = '') {
@@ -134,8 +134,11 @@ export function normalizeMarkets(list) {
 /**
  * 실시간 가격: 웹소켓 1개. 끊기면 지수 백오프로 재연결하고 그동안 REST 폴링으로 대체
  * status: 'connecting' | 'live' | 'polling' | 'offline'
+ * onStatus(status, info) — info.reason: 마지막 실패 이유(사람이 읽는 문장)
  */
-export function createPriceFeed({ client, onTicker, onStatus = () => {}, WebSocketImpl, url = UPBIT_WS, pingMs = WS_PING_MS, pollMs = POLL_MS }) {
+export const WS_WATCHDOG_MS = 75000; // 이 시간 동안 아무 메시지(PING 응답 포함)도 없으면 끊긴 것으로 본다
+export const OFFLINE_AFTER_FAILS = 3; // 폴링이 연속 이만큼 실패해야 '연결 실패'로 표시
+export function createPriceFeed({ client, onTicker, onStatus = () => {}, WebSocketImpl, url = UPBIT_WS, pingMs = WS_PING_MS, pollMs = POLL_MS, watchdogMs = WS_WATCHDOG_MS, now = () => Date.now() }) {
   const WS = WebSocketImpl || globalThis.WebSocket;
   let market = null;
   let ws = null;
@@ -145,28 +148,44 @@ export function createPriceFeed({ client, onTicker, onStatus = () => {}, WebSock
   let pingTimer = null;
   let closed = false;
   let status = '';
+  let pollFails = 0;
+  let lastMsgAt = 0;
+  let reason = '';
 
   const setStatus = (s) => {
     if (s !== status) {
       status = s;
-      onStatus(s);
+      onStatus(s, { reason });
     }
   };
+  const wsOpen = () => ws && ws.readyState === 1;
 
   function subscribe() {
-    if (!ws || ws.readyState !== 1 || !market) return;
+    if (!wsOpen() || !market) return;
     const ticket = `upbit-bot-${Math.random().toString(36).slice(2)}`;
     ws.send(JSON.stringify([{ ticket }, { type: 'ticker', codes: [market] }, { format: 'DEFAULT' }]));
+  }
+
+  function describe(e) {
+    if (!e) return '알 수 없는 오류';
+    if (e.status === 429) return '요청이 너무 많아 업비트가 잠시 제한함(429)';
+    if (e.status === 418) return '업비트가 요청을 일시 차단함(418)';
+    if (e.code === 'network') return '네트워크 오류 또는 브라우저 차단(인터넷 연결·광고 차단 확장 확인)';
+    return e.message || String(e);
   }
 
   async function pollOnce() {
     if (!market) return;
     try {
       const list = await client.getTickers([market]);
+      pollFails = 0;
       if (list && list[0]) onTicker(normalizeTicker(list[0]));
-      if (!ws || ws.readyState !== 1) setStatus('polling');
+      if (!wsOpen()) setStatus('polling');
     } catch (e) {
-      if (!ws || ws.readyState !== 1) setStatus('offline');
+      pollFails += 1;
+      reason = describe(e);
+      // 한두 번 실패는 흔하므로 연속으로 실패할 때만 '연결 실패'로 보여 준다
+      if (!wsOpen() && pollFails >= OFFLINE_AFTER_FAILS) setStatus('offline');
     }
   }
 
@@ -209,10 +228,12 @@ export function createPriceFeed({ client, onTicker, onStatus = () => {}, WebSock
     ws = null;
   }
 
-  function onDrop() {
+  function onDrop(why, { immediate = false } = {}) {
+    if (why) reason = why;
     cleanupSocket();
     startPolling();
-    scheduleReconnect();
+    if (immediate) connect();
+    else scheduleReconnect();
   }
 
   function connect() {
@@ -225,21 +246,28 @@ export function createPriceFeed({ client, onTicker, onStatus = () => {}, WebSock
     try {
       ws = new WS(url);
     } catch (e) {
-      onDrop();
+      onDrop('실시간 연결을 만들 수 없음');
       return;
     }
     ws.binaryType = 'arraybuffer';
     ws.onopen = () => {
       backoff = 1000;
+      lastMsgAt = now();
       stopPolling();
       subscribe();
       setStatus('live');
-      // 무응답 끊김 방지 — 공식 문서 확인 필요(idle timeout, PING 방식)
+      // 무응답 끊김 방지: PING을 보내고, 응답·시세가 오래 없으면 다시 연결한다(공식 문서 확인 필요: idle timeout)
       pingTimer = setInterval(() => {
+        if (now() - lastMsgAt > watchdogMs) {
+          // 잘 되던 연결이 조용히 끊긴 경우라 기다리지 않고 바로 다시 붙는다
+          onDrop('실시간 응답 없음(자동 재연결)', { immediate: true });
+          return;
+        }
         try { ws.send('PING'); } catch (e) { /* 무시 */ }
       }, pingMs);
     };
     ws.onmessage = (ev) => {
+      lastMsgAt = now();
       const text = decode(ev.data);
       if (!text || text[0] !== '{') return;
       let msg;
@@ -249,24 +277,29 @@ export function createPriceFeed({ client, onTicker, onStatus = () => {}, WebSock
         onTicker(normalizeTicker(msg));
       }
     };
-    ws.onerror = () => onDrop();
-    ws.onclose = () => onDrop();
+    ws.onerror = () => onDrop('실시간 연결 오류');
+    ws.onclose = (ev) => onDrop(`실시간 연결 끊김${ev && ev.code ? `(코드 ${ev.code})` : ''}`);
   }
 
   return {
     get status() { return status; },
+    get reason() { return reason; },
     setMarket(m) {
       market = m;
-      if (ws && ws.readyState === 1) subscribe();
+      if (wsOpen()) subscribe();
       if (pollTimer) pollOnce();
       if (!ws && !reconnectTimer && !pollTimer) connect();
     },
+    // 화면 복귀·인터넷 재연결·사용자 클릭 때 즉시 다시 붙는다
     reconnectNow() {
-      if (ws && ws.readyState === 1) return;
+      if (closed) return;
+      if (wsOpen() && now() - lastMsgAt < watchdogMs) return;
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
       backoff = 1000;
+      pollFails = 0;
       cleanupSocket();
+      if (pollTimer) pollOnce();
       connect();
     },
     close() {
