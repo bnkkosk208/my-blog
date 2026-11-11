@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadEnv, setEnvValue } from './env.js';
 import { buildQuery, makeJwt, decodeJwtUnsigned } from './upbit-auth.js';
+import { createLedger, toUnits, fromUnits } from './ledger.js';
 
 export const VERSION = '1.0.0';
 // 공식 문서 확인 필요(spec 11장 5번): 미체결 조회 경로, 주문 엔드포인트
@@ -75,15 +76,26 @@ function digest(s) {
 const NUM_RE = /^\d+(\.\d+)?$/;
 const MARKET_RE = /^[A-Z]{2,5}-[A-Z0-9]{1,15}$/;
 const UUID_RE = /^[0-9a-fA-F-]{36}$/;
+const VOLUME_RE = /^\d+(\.\d{1,8})?$/;
+// DRY-RUN 장부는 서버가 추정한 수량이라 브라우저 추정과 가격 차이만큼 어긋날 수 있다
+const DRY_TOLERANCE = 1.02;
 const IDENT_RE = /^[A-Za-z0-9_.:-]{1,100}$/;
 
-export function createApp(config, { fetchImpl = globalThis.fetch, log = console.log } = {}) {
+export function createApp(config, {
+  fetchImpl = globalThis.fetch,
+  log = console.log,
+  ledgerFile = path.join(SERVER_DIR, 'data', 'positions.json'),
+  pollMs = 1000,
+  pollMax = 15,
+  sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+} = {}) {
   const hosts = new Set([`127.0.0.1:${config.port}`, `localhost:${config.port}`]);
   const sameOrigins = new Set([...hosts].map((h) => `http://${h}`));
   const tokenDigest = digest(config.localToken);
   const auth = { fails: 0, lockedUntil: 0 };
   const daily = { date: kstDateKey(), count: 0 };
   const identifiers = new Set();
+  const ledger = createLedger(ledgerFile, { log });
 
   function send(res, status, body, headers = {}) {
     const data = JSON.stringify(body);
@@ -200,16 +212,121 @@ export function createApp(config, { fetchImpl = globalThis.fetch, log = console.
       if (p > config.maxOrderKrw) return ['over_max_order', `1회 최대 주문금액 ${config.maxOrderKrw}원 초과입니다`];
     } else if (b.side === 'ask') {
       if (b.ord_type !== 'market' || b.price != null) return '시장가 매도는 ord_type=market, volume만 허용합니다';
-      if (!NUM_RE.test(String(b.volume)) || !(Number(b.volume) > 0)) return 'volume 형식 오류';
+      if (!VOLUME_RE.test(String(b.volume)) || !(Number(b.volume) > 0)) return 'volume 형식 오류(소수 8자리까지)';
     } else {
       return 'side는 bid 또는 ask여야 합니다';
     }
-    if (daily.date !== kstDateKey()) {
-      daily.date = kstDateKey();
-      daily.count = 0;
+    // 일일 한도는 매수에만 적용한다. 매도(청산)는 막지 않는다
+    if (b.side === 'bid') {
+      if (daily.date !== kstDateKey()) {
+        daily.date = kstDateKey();
+        daily.count = 0;
+      }
+      if (daily.count >= config.dailyMaxOrders) return ['daily_limit', `서버 일일 최대 매수 횟수(${config.dailyMaxOrders}) 초과 — 매도(청산)는 계속 가능합니다`];
     }
-    if (daily.count >= config.dailyMaxOrders) return ['daily_limit', `서버 일일 최대 주문 횟수(${config.dailyMaxOrders}) 초과`];
     return null;
+  }
+
+  const isFinal = (o) => o && (o.state === 'done' || o.state === 'cancel');
+
+  // 체결 확정: 매수는 체결 수량만큼 장부 증가, 매도는 미리 뺀 수량 중 미체결분을 되돌린다
+  function settle(uuid, order) {
+    const info = ledger.takePending(uuid);
+    if (!info) return;
+    const executed = toUnits(order.executed_volume);
+    if (info.side === 'bid') {
+      ledger.add('live', info.market, executed);
+      log(`장부: ${info.market} 매수 체결 +${fromUnits(executed)}`);
+    } else {
+      const refund = Math.max(0, info.units - executed);
+      if (refund > 0) ledger.add('live', info.market, refund);
+      log(`장부: ${info.market} 매도 체결 ${fromUnits(executed)}${refund > 0 ? `, 미체결 ${fromUnits(refund)} 복구` : ''}`);
+    }
+  }
+
+  // 브라우저와 별개로 서버도 체결을 확인한다(브라우저 탭이 닫혀도 장부가 맞도록)
+  async function confirmOrder(uuid) {
+    for (let i = 0; i < pollMax; i++) {
+      await sleep(pollMs);
+      if (!ledger.hasPending(uuid)) return;
+      const r = await upbit('GET', '/v1/order', { uuid });
+      if (r.status === 200 && isFinal(r.body.data)) {
+        settle(uuid, r.body.data);
+        return;
+      }
+    }
+    log('경고: 주문 체결을 확인하지 못했습니다 — 매수는 장부에 넣지 않고, 매도는 뺀 수량을 그대로 둡니다');
+  }
+
+  async function dryEstimateUnits(market, krw) {
+    try {
+      const r = await fetchImpl(`${UPBIT_API}/v1/ticker?markets=${encodeURIComponent(market)}`, {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(3000)
+      });
+      const list = await r.json();
+      const price = Number(list?.[0]?.trade_price);
+      if (r.ok && price > 0) return Math.floor((krw / price) * 1e8);
+    } catch (e) {
+      // 시세를 못 받으면 추정 불가
+    }
+    return -1;
+  }
+
+  async function placeOrder(body, res, cors) {
+    const book = config.dryRun ? 'dry' : 'live';
+    const market = body.market;
+    let units = 0;
+    if (body.side === 'ask') {
+      units = toUnits(body.volume);
+      const have = ledger.get(book, market);
+      const unknownDry = book === 'dry' && have < 0;
+      const limit = book === 'dry' ? Math.floor(have * DRY_TOLERANCE) : have;
+      if (!unknownDry && units > limit) {
+        return fail(res, 400, 'over_position',
+          `봇이 산 수량(${fromUnits(Math.max(0, have))})보다 많이 매도할 수 없습니다. 원래 보유하던 코인은 업비트에서 직접 매도하세요`, cors);
+      }
+      // 동시 요청 대비: 업비트로 보내기 전에 먼저 뺀다
+      if (unknownDry) ledger.sub(book, market, Infinity);
+      else ledger.sub(book, market, units);
+    } else {
+      daily.count += 1; // 실패하면 아래에서 되돌린다
+    }
+    identifiers.add(body.identifier);
+    // 업비트로 보낼 파라미터를 고정 순서로 다시 만든다(브라우저 값을 그대로 쓰지 않음)
+    const params = body.side === 'bid'
+      ? { market, side: 'bid', ord_type: 'price', price: String(body.price), identifier: body.identifier }
+      : { market, side: 'ask', ord_type: 'market', volume: String(body.volume), identifier: body.identifier };
+    const out = await upbit('POST', '/v1/orders', params, { dry: config.dryRun });
+    const ok = out.status === 200 && out.body.ok;
+    if (!ok) {
+      // 업비트가 거부한 주문은 횟수·장부에 반영하지 않는다. 연결 실패는 나갔는지 모르므로 보수적으로 유지
+      const rejected = out.body?.code !== 'upstream_unreachable';
+      if (rejected) {
+        if (body.side === 'bid') daily.count = Math.max(0, daily.count - 1);
+        else ledger.add(book, market, units);
+      } else {
+        log('경고: 주문 전송 결과를 알 수 없습니다 — 매수 횟수와 매도 장부 차감을 유지합니다');
+      }
+    } else if (config.dryRun) {
+      if (body.side === 'bid') {
+        const est = await dryEstimateUnits(market, Number(body.price));
+        // 시세를 못 받아 추정할 수 없으면 '알 수 없음'으로 표시하고 다음 DRY-RUN 매도는 통과시킨다
+        if (est > 0 && ledger.get('dry', market) >= 0) ledger.add('dry', market, est);
+        else ledger.setUnknown('dry', market);
+      }
+      const left = ledger.get('dry', market);
+      out.body.ledger = { book: 'dry', market, qty: left < 0 ? '알 수 없음' : fromUnits(left) };
+    } else {
+      const uuid = out.body.data?.uuid;
+      if (uuid) {
+        ledger.addPending(uuid, { market, side: body.side, units, at: Date.now() });
+        confirmOrder(uuid).catch(() => {});
+      } else if (body.side === 'bid') {
+        log('경고: 주문 번호(uuid)가 없어 매수 체결을 장부에 넣지 못했습니다');
+      }
+    }
+    return send(res, out.status, out.body, { ...cors, ...(out.headers || {}) });
   }
 
   async function handleApi(req, res, url, cors) {
@@ -233,10 +350,13 @@ export function createApp(config, { fetchImpl = globalThis.fetch, log = console.
       const uuid = q.get('uuid');
       if (!UUID_RE.test(uuid || '')) return fail(res, 400, 'validation_error', 'uuid 형식 오류', cors);
       out = await upbit(req.method, '/v1/order', { uuid }, { dry: req.method === 'DELETE' && config.dryRun });
+      if (req.method === 'GET' && out.status === 200 && isFinal(out.body.data)) settle(uuid, out.body.data);
     } else if (route === 'GET /api/orders/open') {
       const market = q.get('market');
       if (!MARKET_RE.test(market || '')) return fail(res, 400, 'validation_error', 'market 형식 오류', cors);
       out = await upbit('GET', OPEN_ORDERS_PATH, { market });
+    } else if (route === 'GET /api/positions') {
+      return send(res, 200, { ok: true, dryRun: config.dryRun, ...ledger.snapshot() }, cors);
     } else if (route === 'POST /api/orders') {
       if (!String(req.headers['content-type'] || '').startsWith('application/json')) {
         return fail(res, 415, 'validation_error', 'Content-Type: application/json만 허용합니다', cors);
@@ -253,13 +373,7 @@ export function createApp(config, { fetchImpl = globalThis.fetch, log = console.
         const [code, message] = Array.isArray(err) ? err : ['validation_error', err];
         return fail(res, 400, code, message, cors);
       }
-      // 업비트로 보낼 파라미터를 고정 순서로 다시 만든다(브라우저 값을 그대로 쓰지 않음)
-      const params = body.side === 'bid'
-        ? { market: body.market, side: 'bid', ord_type: 'price', price: String(body.price), identifier: body.identifier }
-        : { market: body.market, side: 'ask', ord_type: 'market', volume: String(body.volume), identifier: body.identifier };
-      identifiers.add(body.identifier);
-      daily.count += 1;
-      out = await upbit('POST', '/v1/orders', params, { dry: config.dryRun });
+      return placeOrder(body, res, cors);
     } else {
       return fail(res, 404, 'not_found', '없는 API입니다', cors);
     }

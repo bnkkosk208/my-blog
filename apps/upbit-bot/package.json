@@ -8,7 +8,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test tests/lib.test.js",
+    "test": "node --test tests/lib.test.js tests/server.test.js",
     "start": "node server/server.js",
     "sign-check": "node server/sign-check.js"
   }
