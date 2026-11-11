@@ -932,9 +932,18 @@ function renderServerChip() {
   chip.className = `chip ${cls}`;
   const elig = liveEligibility();
   $('mode-live').setAttribute('aria-disabled', String(!elig.ok && app.mode !== 'live'));
+  renderLiveBanner();
   $('server-detail').textContent = s.reachable
     ? `서버 v${s.version} · ${s.dryRun ? 'DRY-RUN(주문 미전송)' : '실주문'} · 키 ${s.keyConfigured ? '설정됨' : '없음'}${s.keyExpireAt ? `(만료 ${String(s.keyExpireAt).slice(0, 10)})` : ''} · 서버 1회 최대 ${V.fmtKrw(s.maxOrderKrw)} · 하루 ${s.dailyMaxOrders}회 · 허용 마켓 ${(s.allowedMarkets || []).join(', ')}`
     : s.disabled ? '현재 주소에서는 로컬 서버를 확인하지 않습니다.' : '로컬 서버 응답 없음';
+}
+
+// 실거래 띠: 서버가 DRY-RUN이면 주문이 업비트로 나가지 않으므로 문구와 색을 구분한다
+function renderLiveBanner() {
+  const banner = $('live-banner');
+  const dry = app.mode === 'live' && monitor.state.reachable && monitor.state.dryRun;
+  banner.textContent = dry ? '실거래 모드 · 시험 모드(DRY-RUN) — 업비트로 주문이 나가지 않음' : '실거래 모드 · 실제 주문';
+  banner.classList.toggle('dry', Boolean(dry));
 }
 
 function setMode(mode) {
