@@ -12,7 +12,7 @@ import { createChart } from './ui/chart.js';
 import * as V from './ui/views.js';
 import { isServedLocally, isTopWindow, createServerMonitor, chipText, openLiveDialog } from './ui/live-gate.js';
 
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.1.0'; // index.html의 importmap·스크립트 버전과 같게 유지
 
 const RISK_TEXT = [
   '이 앱은 개인 학습·실험용으로 만든 도구이며 투자 권유나 자문이 아닙니다. 가상자산은 가격 변동이 매우 크고 원금 전액을 잃을 수 있습니다.',

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>업비트 자동매매 봇 (모의투자)</title>
-  <meta name="description" content="업비트 실시간 시세로 변동성 돌파·이동평균 교차·RSI 전략을 가상 잔고로 돌려 보는 자동매매 봇">
+  <meta name="description" content="업비트 실시간 시세로 조정 매수·변동성 돌파·이동평균 교차·RSI 전략을 가상 잔고로 돌려 보는 자동매매 봇">
   <script>
     // 블로그에 저장된 테마를 먼저 반영해 깜빡임을 줄인다
     try {
@@ -16,8 +16,27 @@
       // 저장소 접근 불가 시 시스템 설정만 따른다
     }
   </script>
-  <link rel="stylesheet" href="./style.css">
-  <script type="module" src="./main.js"></script>
+  <link rel="stylesheet" href="./style.css?v=1.1.0">
+  <!-- 업데이트 후 브라우저 캐시에 남은 예전 스크립트와 섞이지 않도록 모든 모듈에 버전을 붙인다(APP_VERSION과 같게 유지) -->
+  <script type="importmap">
+{
+  "imports": {
+    "./lib/backtest.js": "./lib/backtest.js?v=1.1.0",
+    "./lib/bot.js": "./lib/bot.js?v=1.1.0",
+    "./lib/brokers.js": "./lib/brokers.js?v=1.1.0",
+    "./lib/candles.js": "./lib/candles.js?v=1.1.0",
+    "./lib/indicators.js": "./lib/indicators.js?v=1.1.0",
+    "./lib/market-rules.js": "./lib/market-rules.js?v=1.1.0",
+    "./lib/store.js": "./lib/store.js?v=1.1.0",
+    "./lib/strategies.js": "./lib/strategies.js?v=1.1.0",
+    "./lib/upbit-public.js": "./lib/upbit-public.js?v=1.1.0",
+    "./ui/chart.js": "./ui/chart.js?v=1.1.0",
+    "./ui/live-gate.js": "./ui/live-gate.js?v=1.1.0",
+    "./ui/views.js": "./ui/views.js?v=1.1.0"
+  }
+}
+  </script>
+  <script type="module" src="./main.js?v=1.1.0"></script>
 </head>
 <body>
   <div id="live-banner" class="live-banner" hidden>실거래 모드 · 실제 주문</div>
