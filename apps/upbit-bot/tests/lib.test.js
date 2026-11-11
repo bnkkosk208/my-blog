@@ -303,6 +303,62 @@ test('백테스트: RSI 실행', () => {
   eq(Number.isFinite(r.totalReturn), true);
 });
 
+// Review에서 추가: 돈 관련 경계 사례
+test('엔진: 현재가가 없으면 매도를 보류하고 포지션을 지우지 않음', async () => {
+  const fx = engineFixture();
+  await fx.engine.start();
+  await fx.engine.executeBuy('테스트', 50000000);
+  const qty = fx.engine.state.position.qty;
+  await fx.engine.executeSell('테스트', undefined);
+  eq(fx.engine.state.position?.qty, qty);
+  eq(fx.logs.some((l) => l.msg.includes('현재가가 없어')), true);
+});
+
+test('엔진: 일일 한도 10회 중 9회 사용 → 매수 안 함(청산 1회분 보존), 보유 중 매도는 허용', async () => {
+  const fx = engineFixture();
+  await fx.engine.start();
+  fx.engine.state.dailyCount.count = 9;
+  await fx.engine.executeBuy('10번째', 50000000);
+  eq(fx.engine.state.position, null);
+  eq(fx.engine.running, false);
+  const fx2 = engineFixture();
+  await fx2.engine.start();
+  await fx2.engine.executeBuy('매수', 50000000);
+  fx2.engine.state.dailyCount.count = 9;
+  await fx2.engine.executeSell('청산', 50000000);
+  eq(fx2.engine.state.position, null);
+  eq(fx2.engine.state.dailyCount.count, 10);
+  eq(fx2.engine.running, false);
+});
+
+test('엔진: 다른 마켓 포지션이 남아 있으면 시작 거부, 포지션에 마켓 기록', async () => {
+  const fx = engineFixture();
+  await fx.engine.start();
+  await fx.engine.executeBuy('테스트', 50000000);
+  eq(fx.engine.state.position.market, 'KRW-BTC');
+  fx.engine.stop();
+  fx.engine.configure({ market: 'KRW-ETH', strategyId: 'ma', params: { short: 2, long: 3 } });
+  let err = null;
+  try { await fx.engine.start(); } catch (e) { err = e; }
+  eq(!!err && err.message.includes('KRW-BTC'), true);
+});
+
+test('LiveBroker: 체결 조회가 계속 실패하면 unconfirmed(포지션 누락·중복 매수 방지)', async () => {
+  const { LiveBroker } = await import('../lib/brokers.js');
+  const fetchImpl = async (url, opts) => {
+    if (opts.method === 'POST') return new Response(JSON.stringify({ ok: true, data: { uuid: '11111111-1111-1111-1111-111111111111' } }), { status: 200 });
+    throw new Error('offline');
+  };
+  const b = new LiveBroker({ getToken: () => 't', fetchImpl, sleep: async () => {}, pollMax: 3 });
+  let err = null;
+  try { await b.marketBuy('KRW-BTC', 10000, 50000000); } catch (e) { err = e; }
+  eq(err?.code, 'unconfirmed');
+  const b2 = new LiveBroker({ getToken: () => 't', fetchImpl: async () => { throw new Error('down'); }, sleep: async () => {} });
+  err = null;
+  try { await b2.marketBuy('KRW-BTC', 10000, 50000000); } catch (e) { err = e; }
+  eq(err?.code, 'unconfirmed');
+});
+
 // Node에서는 node:test로 등록
 const isNode = typeof process !== 'undefined' && !!process.versions?.node;
 if (isNode) {

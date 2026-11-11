@@ -239,6 +239,13 @@ function renderMarketWarning() {
 
 function changeMarket(market) {
   if (engine.running || market === settings.market) return;
+  const held = engine.state.position;
+  if (held && (held.market || settings.market) !== market) {
+    // 봇 1개 = 마켓 1개: 보유 포지션을 다른 마켓 기준으로 매도·평가하지 않도록 막는다
+    $('market-select').value = settings.market;
+    confirmDialog('마켓 변경', [`${held.market || settings.market} 보유 포지션이 있습니다. "보유분 시장가 매도"로 정리한 뒤 마켓을 바꾸세요.`], { cancel: false });
+    return;
+  }
   settings.market = market;
   saveSettings();
   app.ticker = null;
@@ -789,8 +796,9 @@ async function startBot() {
 async function sellAll() {
   const pos = engine.state.position;
   if (!pos) return;
+  const posMarket = pos.market || settings.market;
   const ok = await confirmDialog('보유분 시장가 매도', [
-    `${settings.market} ${V.fmtQty(pos.qty)} ${coinOf(settings.market)}를 시장가로 매도합니다.`,
+    `${posMarket} ${V.fmtQty(pos.qty)} ${coinOf(posMarket)}를 시장가로 매도합니다.`,
     app.mode === 'live' ? '실거래 모드입니다. 실제 주문이 나갈 수 있습니다.' : '모의 계좌에서 매도합니다.'
   ], { okLabel: '매도', danger: true });
   if (!ok) return;

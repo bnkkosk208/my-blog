@@ -205,7 +205,16 @@ export class LiveBroker {
     if (this.inFlight) throw new BrokerError('이전 주문이 처리 중입니다', 'in_flight');
     this.inFlight = true;
     try {
-      const d = await this.api('POST', '/api/orders', { ...body, identifier: this.identifier() });
+      let d;
+      try {
+        d = await this.api('POST', '/api/orders', { ...body, identifier: this.identifier() });
+      } catch (e) {
+        // 연결 끊김·업비트 응답 없음은 주문이 실제로 나갔는지 알 수 없다 → 확인 실패로 보고 봇을 멈추게 한다
+        if (e.code === 'network' || e.code === 'upstream_unreachable' || e.status >= 500) {
+          throw new BrokerError(`주문 전송 결과를 확인할 수 없습니다(${e.message}) — 업비트에서 주문 내역을 직접 확인하세요`, 'unconfirmed');
+        }
+        throw e;
+      }
       if (d.dryRun) {
         // DRY-RUN: 업비트로 보내지 않았다. 현재가 기준 추정 체결로 흐름만 이어간다
         return { id: 'dry-run', ...estimate, dryRun: true, request: d.request, at: this.now() };
@@ -220,7 +229,13 @@ export class LiveBroker {
   async waitFilled(uuid, market) {
     for (let i = 0; i < this.pollMax; i++) {
       await this.sleep(this.pollMs);
-      const d = await this.api('GET', `/api/order?uuid=${encodeURIComponent(uuid)}`);
+      let d;
+      try {
+        d = await this.api('GET', `/api/order?uuid=${encodeURIComponent(uuid)}`);
+      } catch (e) {
+        // 조회 실패는 체결 여부를 모르는 상태 — 재시도 후 끝내 실패하면 'unconfirmed'
+        continue;
+      }
       const o = d.data || d;
       const executed = Number(o.executed_volume || 0);
       // 시장가 매수는 체결 후 state가 cancel로 끝날 수 있음 — 공식 문서 확인 필요

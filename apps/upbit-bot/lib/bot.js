@@ -132,6 +132,10 @@ export class BotEngine extends EventTarget {
     if (this.state.running) return;
     const v = validateParams(this.config.strategyId, this.config.params);
     if (!v.ok) throw new Error(v.errors.join(', '));
+    const held = this.state.position;
+    if (held && held.market && held.market !== this.config.market) {
+      throw new Error(`${held.market} 보유 포지션이 남아 있습니다. 해당 마켓으로 돌아가 매도한 뒤 다른 마켓으로 시작하세요`);
+    }
     this.state.error = null;
     try {
       const chance = await this.broker.getChance(this.config.market);
@@ -212,6 +216,7 @@ export class BotEngine extends EventTarget {
   checkRisk(price) {
     const pos = this.state.position;
     if (!pos || !(price > 0)) return null;
+    if (pos.market && pos.market !== this.config.market) return null;
     const s = this.config.safety;
     const change = price / pos.avgPrice - 1;
     if (s.stopLoss?.on && change <= -s.stopLoss.pct / 100) return `손절(${(change * 100).toFixed(2)}%)`;
@@ -259,10 +264,11 @@ export class BotEngine extends EventTarget {
     }
   }
 
-  checkDailyLimit() {
+  // 매수는 청산(매도) 1회분을 남겨 두고 허용한다(reserve=1). 매도는 한도 때문에 막지 않는다
+  checkDailyLimit(reserve = 0) {
     this.rollDaily();
     const max = this.config.safety.dailyMaxOrders;
-    if (max > 0 && this.state.dailyCount.count >= max) {
+    if (max > 0 && this.state.dailyCount.count + reserve >= max) {
       this.stop(`일일 최대 주문 횟수(${max}회) 도달 — 봇 자동 정지`, 'warn');
       return false;
     }
@@ -283,7 +289,7 @@ export class BotEngine extends EventTarget {
 
   async executeBuy(reason, price) {
     if (this.state.position) return;
-    if (!this.checkDailyLimit()) return;
+    if (!this.checkDailyLimit(1)) return;
     let bal;
     try {
       bal = await this.broker.getBalance();
@@ -317,6 +323,7 @@ export class BotEngine extends EventTarget {
     this.orderErrors = 0;
     this.state.dailyCount.count += 1;
     this.state.position = {
+      market: this.config.market,
       qty: fill.qty,
       avgPrice: fill.price,
       enteredAt: this.now(),
@@ -333,13 +340,19 @@ export class BotEngine extends EventTarget {
   async executeSell(reason, price, { manual = false } = {}) {
     const pos = this.state.position;
     if (!pos) return;
-    if (!manual && !this.checkDailyLimit()) return;
+    const market = pos.market || this.config.market;
+    if (!(price > 0)) {
+      // 현재가가 없으면 '잔량 소액'으로 오판해 포지션을 지우지 않도록 보류한다
+      this.log('warn', `현재가가 없어 매도를 보류합니다(${reason})`);
+      this.persist();
+      return;
+    }
     let qty = pos.qty;
     if (this.broker.kind === 'live' && !pos.dryRun) {
       // 봇이 산 수량과 실제 잔고 중 작은 값만 매도
       try {
         const bal = await this.broker.getBalance();
-        qty = floor8(Math.min(qty, bal.coins[coinOf(this.config.market)]?.qty || 0));
+        qty = floor8(Math.min(qty, bal.coins[coinOf(market)]?.qty || 0));
       } catch (e) {
         this.onOrderError(e);
         return;
@@ -353,7 +366,7 @@ export class BotEngine extends EventTarget {
     }
     let fill;
     try {
-      fill = await this.broker.marketSell(this.config.market, qty, price);
+      fill = await this.broker.marketSell(market, qty, price);
     } catch (e) {
       this.onOrderError(e);
       return;
@@ -381,6 +394,13 @@ export class BotEngine extends EventTarget {
         return;
       }
     }
+    if (this.state.running && !this.state.position) {
+      const max = this.config.safety.dailyMaxOrders;
+      if (max > 0 && this.state.dailyCount.count + 1 >= max) {
+        this.stop(`일일 최대 주문 횟수(${max}회) 도달 — 봇 자동 정지`, 'warn');
+        return;
+      }
+    }
     this.setStatus();
   }
 
@@ -404,7 +424,8 @@ export class BotEngine extends EventTarget {
     if (!this.state.position || this.busy) return;
     this.busy = true;
     try {
-      await this.executeSell('수동 매도', this.getPrice(this.config.market), { manual: true });
+      const market = this.state.position.market || this.config.market;
+      await this.executeSell('수동 매도', this.getPrice(market), { manual: true });
     } finally {
       this.busy = false;
     }

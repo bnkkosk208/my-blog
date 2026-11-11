@@ -214,6 +214,9 @@ h1, h2, h3 { line-height: 1.3; }
 .field { display: block; margin: 0 0 10px; }
 .field-label { display: block; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 4px; }
 .field .input { width: 100%; }
+/* 투자 행의 숫자 입력은 .field .input(100%)보다 우선해 고정 폭 유지 */
+.field .invest-row .num-input { width: 110px; }
+.field .invest-row .num-input.short { width: 64px; }
 .radio-row, .invest-row, .toggle-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
 .toggle-row { margin-bottom: 8px; }
 .radio, .check { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; cursor: pointer; }
