@@ -1,7 +1,7 @@
 // 엔트리: 상태 초기화, 모듈 연결, 이벤트 바인딩
 import { createStore, tokenStore } from './lib/store.js';
 import { createPublicClient, createPriceFeed, normalizeMarkets } from './lib/upbit-public.js';
-import { STRATEGIES, PARAM_SPECS, STRATEGY_UNITS, candleUnitOf, validateParams, evaluate } from './lib/strategies.js';
+import { STRATEGIES, PARAM_SPECS, STRATEGY_UNITS, candleUnitOf, validateParams, evaluate, isPriceBased } from './lib/strategies.js';
 import { CANDLE_UNITS, closedOnly, nextCloseTime, formatKst } from './lib/candles.js';
 import { sma, rsiWilder } from './lib/indicators.js';
 import { runBacktest } from './lib/backtest.js';
@@ -41,8 +41,9 @@ const store = createStore();
 // ---------- 설정 ----------
 const DEFAULT_SETTINGS = {
   market: 'KRW-BTC',
-  strategyId: 'vb',
+  strategyId: 'dip', // 저장된 설정이 없을 때만 적용(기존 사용자는 저장된 전략 유지)
   params: {
+    dip: { ...STRATEGIES.dip.defaults },
     vb: { ...STRATEGIES.vb.defaults },
     ma: { ...STRATEGIES.ma.defaults },
     rsi: { ...STRATEGIES.rsi.defaults }
@@ -65,13 +66,14 @@ function loadSettings() {
   const d = structuredClone(DEFAULT_SETTINGS);
   const out = { ...d, ...s };
   out.params = {
+    dip: { ...d.params.dip, ...(s.params?.dip || {}) },
     vb: { ...d.params.vb, ...(s.params?.vb || {}) },
     ma: { ...d.params.ma, ...(s.params?.ma || {}) },
     rsi: { ...d.params.rsi, ...(s.params?.rsi || {}) }
   };
   out.invest = { ...d.invest, ...(s.invest || {}) };
   out.safety = { ...d.safety, ...(s.safety || {}) };
-  if (!STRATEGIES[out.strategyId]) out.strategyId = 'vb';
+  if (!STRATEGIES[out.strategyId]) out.strategyId = 'dip';
   for (const id of ['ma', 'rsi']) {
     const u = out.params[id].unit;
     if (!CANDLE_UNITS[u] || (u === 'minutes/1' && !DEBUG)) out.params[id].unit = 'minutes/60';
@@ -302,11 +304,16 @@ function renderTicker(prev) {
   }
 }
 
-function onFeedStatus(s) {
+function onFeedStatus(s, info = {}) {
   const [text, cls] = FEED_TEXT[s] || FEED_TEXT.connecting;
   const chip = $('feed-chip');
   chip.textContent = text;
   chip.className = `chip ${cls}`;
+  // 끊긴 이유를 칩에 붙여 원인을 바로 알 수 있게 한다(눌러서 즉시 재연결)
+  const why = (s === 'polling' || s === 'offline') && info.reason ? info.reason : '';
+  chip.title = why ? `원인: ${why} · 눌러서 다시 연결` : '';
+  $('feed-reason').textContent = s === 'offline' && why ? `원인: ${why} — 칩을 누르면 바로 다시 연결합니다` : '';
+  if (why) console.warn('[시세]', s, why);
 }
 
 // ---------- 캔들 데이터 ----------
@@ -411,16 +418,34 @@ function updateChart() {
     unit: app.chartUnit,
     ma: { short: sma(closes, maS), long: sma(closes, maL) },
     target: sid === 'vb' && app.chartUnit === 'days' ? ind?.target || 0 : 0,
+    levels: sid === 'dip' && app.chartUnit === 'days' ? dipLevels(ind) : [],
     markers: chartMarkers(),
     rsi: sid === 'rsi' ? { values: rsiWilder(closes, p.period), low: p.low, high: p.high } : null
   };
   $('chart-wrap').classList.toggle('with-rsi', !!data.rsi);
+  $('legend-vb').hidden = sid !== 'vb';
+  $('legend-dip').hidden = sid !== 'dip';
   $('legend-ma1').textContent = `MA${maS}`;
   $('legend-ma2').textContent = `MA${maL}`;
   const price = app.prices[settings.market];
   $('chart').setAttribute('aria-label', `${settings.market} ${CANDLE_UNITS[app.chartUnit].label}봉 차트${price ? `, 현재가 ${V.fmtPrice(price)}원` : ''}`);
   if (!cs.length) chart.setMessage('차트 데이터를 불러오는 중…');
   chart.setData(data);
+}
+
+// 상태 줄용 등락률(예: −3.2%)
+const fmtSignedPct = (r) => V.fmtPct(r, 1).replace(/^-/, '−');
+
+// 조정 매수: 미보유면 매수가격선, 보유 중이면 익절선·손절선
+function dipLevels(ind) {
+  if (!ind) return [];
+  if (ind.takeProfit) {
+    return [
+      { price: ind.takeProfit, label: '익절선', color: 'up' },
+      { price: ind.stopLine, label: '손절선', color: 'down' }
+    ];
+  }
+  return ind.buyLine ? [{ price: ind.buyLine, label: '매수가격선', color: 'target' }] : [];
 }
 
 // ---------- 전략·파라미터 폼 ----------
@@ -461,7 +486,7 @@ function renderStrategy() {
       renderIndicators();
     });
     box.append(V.el('label', { class: 'check' }, [cb, '이동평균 필터(시가 > 5일 평균)']));
-  } else {
+  } else if (sid !== 'dip') {
     const sel = V.el('select', { class: 'input', id: 'param-unit' });
     const units = DEBUG ? ['minutes/1', ...STRATEGY_UNITS] : STRATEGY_UNITS;
     for (const u of units) sel.append(V.el('option', { value: u, text: `${CANDLE_UNITS[u].label}봉` }));
@@ -590,7 +615,7 @@ function previewResult() {
   const unit = candleUnitOf(sid, p);
   if (unit !== app.strategyUnit) return null;
   const now = Date.now();
-  const candles = sid === 'vb' ? app.strategyCandles : closedOnly(app.strategyCandles, unit, now);
+  const candles = isPriceBased(sid) ? app.strategyCandles : closedOnly(app.strategyCandles, unit, now);
   return evaluate(sid, { candles, price: app.prices[settings.market], now, position: engine?.state.position || null, memo: {}, params: p });
 }
 
@@ -604,7 +629,17 @@ function renderIndicators() {
   }
   const i = r.indicators || {};
   const price = app.prices[settings.market];
-  if (sid === 'vb') {
+  if (sid === 'dip') {
+    if (i.takeProfit) {
+      const chg = price > 0 ? ` · 현재 ${fmtSignedPct(price / i.entry - 1)}(매수가 대비)` : '';
+      line.textContent = `매수가 ${V.fmtPrice(i.entry)} · 익절선 ${V.fmtPrice(i.takeProfit)} · 손절선 ${V.fmtPrice(i.stopLine)}${chg} · ${r.reason}`;
+    } else if (i.prevClose) {
+      const chg = price > 0 ? ` · 현재 ${fmtSignedPct(price / i.prevClose - 1)}` : '';
+      line.textContent = `전일 종가 ${V.fmtPrice(i.prevClose)} · 매수가격선 ${V.fmtPrice(i.buyLine)}${chg} · ${r.reason}`;
+    } else {
+      line.textContent = r.reason;
+    }
+  } else if (sid === 'vb') {
     if (!i.target) { line.textContent = r.reason; return; }
     const state = engine.state.position ? '보유 중' : price >= i.target ? '돌파' : '대기';
     line.textContent = `목표가 ${V.fmtPrice(i.target)}원 · 현재 ${state}${i.ma5 ? ` · 5일 평균 ${V.fmtPrice(i.ma5)}` : ''} · ${r.reason}`;
@@ -619,7 +654,7 @@ function renderIndicators() {
       ? `RSI ${i.rsi.toFixed(2)} (직전 ${i.prevRsi?.toFixed(2)}) · 과매도 ${p.low} / 과매수 ${p.high} · ${r.reason}`
       : r.reason;
   }
-  if (sid === 'vb' && app.chartUnit === 'days') updateChart();
+  if (isPriceBased(sid) && app.chartUnit === 'days') updateChart();
 }
 
 // ---------- 봇 상태·버튼 ----------
@@ -636,7 +671,7 @@ function renderStatus() {
 function renderNextEval() {
   const el = $('next-eval');
   if (!engine.running || !engine.nextEvalAt) { el.textContent = ''; return; }
-  el.textContent = settings.strategyId === 'vb'
+  el.textContent = isPriceBased(settings.strategyId)
     ? `실시간 판정 · 일봉 갱신 ${formatKst(engine.nextEvalAt, 'datetime')}`
     : `다음 판정 ${formatKst(engine.nextEvalAt)}`;
 }
@@ -771,7 +806,7 @@ async function startBot() {
   const info = currentMarketInfo();
   const inv = settings.invest;
   const cfg = currentConfig();
-  const paramText = PARAM_SPECS[sid].map((s) => `${s.label} ${p[s.key]}`).join(', ') + (sid === 'vb' ? '' : `, ${CANDLE_UNITS[p.unit].label}봉`);
+  const paramText = PARAM_SPECS[sid].map((s) => `${s.label} ${p[s.key]}`).join(', ') + (isPriceBased(sid) ? '' : `, ${CANDLE_UNITS[p.unit].label}봉`);
   const lines = [
     `마켓: ${info.korean ? `${info.korean} ` : ''}${settings.market}`,
     `전략: ${STRATEGIES[sid].name} (${paramText})`,
@@ -1050,6 +1085,9 @@ function initLifecycle() {
       e.returnValue = '봇이 실행 중입니다. 닫으면 멈춥니다.';
     }
   });
+  // 인터넷이 다시 연결되면 기다리지 않고 바로 재연결
+  window.addEventListener('online', () => feed.reconnectNow());
+  $('feed-chip').addEventListener('click', () => feed.reconnectNow());
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
     feed.reconnectNow();

@@ -1,11 +1,24 @@
 // 간이 백테스트 (순수 함수). 매번 사용 가능 KRW 전액(수수료 제외)으로 매수한다고 가정
 import { sma, rsiWilder } from './indicators.js';
-import { STRATEGIES, maCross, rsiCross, vbTarget } from './strategies.js';
+import { STRATEGIES, maCross, rsiCross, vbTarget, dipBuyLine, dipTakeProfit, dipStopLine, atOrAbove, atOrBelow } from './strategies.js';
 import { FEE_RATE, simulateBuy, simulateSell, realizedPnl, MIN_ORDER_KRW } from './market-rules.js';
+
+// 백테스트 체결 가정(화면에 그대로 표시)
+export const BACKTEST_ASSUMPTIONS = {
+  dip: [
+    '장중 저가가 매수가격선(전일 종가 × (1 − 하락폭)) 이하면 매수가격선에 매수 체결(시가가 이미 아래면 시가)',
+    '보유 중 고가가 익절선 이상이면 익절선에, 저가가 손절선 이하면 손절선에 매도 체결(시가가 이미 넘으면 시가)',
+    '같은 캔들에서 익절선·손절선에 둘 다 닿으면 손절로 처리(보수적)',
+    '매수한 캔들에서는 익절하지 않고 손절선만 확인, 매도한 캔들에서는 다시 매수하지 않음(하루 1회 진입)'
+  ],
+  vb: ['당일 고가가 목표가 이상이면 목표가에 매수, 다음 일봉 시가에 매도'],
+  ma: ['신호가 난 캔들의 다음 캔들 시가에 체결'],
+  rsi: ['신호가 난 캔들의 다음 캔들 시가에 체결']
+};
 
 /**
  * @param {Array} candles 과거→최신, 마감 캔들
- * @param {'vb'|'ma'|'rsi'} strategyId
+ * @param {'dip'|'vb'|'ma'|'rsi'} strategyId
  * @param {object} params
  * @param {{initialKrw?:number, feeRate?:number, slippage?:number}} opts
  */
@@ -21,6 +34,7 @@ export function runBacktest(candles, strategyId, params = {}, opts = {}) {
   const trades = [];
   const markers = [];
   const equity = new Array(n).fill(initialKrw);
+  const assumptions = BACKTEST_ASSUMPTIONS[strategyId] || [];
 
   const buy = (i, price) => {
     const amount = Math.floor(krw / (1 + feeRate));
@@ -40,7 +54,28 @@ export function runBacktest(candles, strategyId, params = {}, opts = {}) {
     pos = null;
   };
 
-  if (strategyId === 'vb') {
+  if (strategyId === 'dip') {
+    // 일봉 OHLC만으로는 장중 순서를 모르므로 BACKTEST_ASSUMPTIONS.dip의 보수적 가정을 쓴다
+    for (let i = 1; i < n; i++) {
+      const c = candles[i];
+      let exited = false;
+      if (pos) {
+        const tp = dipTakeProfit(pos.entryPrice, p.risePct);
+        const sl = dipStopLine(pos.entryPrice, p.stopPct);
+        if (atOrBelow(c.l, sl)) { sell(i, Math.min(c.o, sl)); exited = true; } // 같은 캔들에서 둘 다 닿으면 손절 우선
+        else if (atOrAbove(c.h, tp)) { sell(i, Math.max(c.o, tp)); exited = true; }
+      }
+      if (!pos && !exited) {
+        const line = dipBuyLine(candles[i - 1].c, p.dropPct);
+        if (atOrBelow(c.l, line)) {
+          buy(i, Math.min(c.o, line));
+          // 진입한 캔들에서는 이후 저가가 손절선에 닿았다고 보수적으로 가정(익절은 다음 캔들부터)
+          if (pos && atOrBelow(c.l, dipStopLine(pos.entryPrice, p.stopPct))) sell(i, dipStopLine(pos.entryPrice, p.stopPct));
+        }
+      }
+      equity[i] = krw + (pos ? pos.qty * c.c : 0);
+    }
+  } else if (strategyId === 'vb') {
     const closes = candles.map((c) => c.c);
     for (let i = 1; i < n; i++) {
       const c = candles[i];
@@ -115,6 +150,7 @@ export function runBacktest(candles, strategyId, params = {}, opts = {}) {
     markers,
     equity,
     from: n ? candles[0].t : null,
-    to: n ? candles[n - 1].t : null
+    to: n ? candles[n - 1].t : null,
+    assumptions
   };
 }

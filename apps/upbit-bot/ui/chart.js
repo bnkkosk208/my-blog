@@ -94,7 +94,10 @@ export function createChart(canvas) {
     for (const arr of [ma1, ma2]) {
       if (arr) for (const x of arr) if (x != null) { lo = Math.min(lo, x); hi = Math.max(hi, x); }
     }
-    if (data.target > 0) { lo = Math.min(lo, data.target); hi = Math.max(hi, data.target); }
+    // 점선 가격선: data.levels [{price, label, color:'target'|'up'|'down'}], data.target(vb 목표가)는 호환용
+    const levels = (data.levels || []).filter((lv) => lv && lv.price > 0);
+    if (data.target > 0) levels.push({ price: data.target, label: '목표가', color: 'target' });
+    for (const lv of levels) { lo = Math.min(lo, lv.price); hi = Math.max(hi, lv.price); }
     if (hi === lo) { hi += hi * 0.01 || 1; lo -= lo * 0.01 || 1; }
     const pad = (hi - lo) * 0.06;
     lo -= pad;
@@ -149,19 +152,20 @@ export function createChart(canvas) {
     line(ma1, c.ma1, y);
     line(ma2, c.ma2, y);
 
-    // 변동성 돌파 목표가
-    if (data.target > 0) {
-      const yy = Math.round(y(data.target)) + 0.5;
-      ctx.strokeStyle = c.target;
+    // 점선 가격선(변동성 돌파 목표가, 조정 매수 매수가격선·익절선·손절선)
+    for (const lv of levels) {
+      const yy = Math.round(y(lv.price)) + 0.5;
+      const color = c[lv.color] || c.target;
+      ctx.strokeStyle = color;
       ctx.setLineDash([5, 4]);
       ctx.beginPath();
       ctx.moveTo(0, yy);
       ctx.lineTo(plotW, yy);
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = c.target;
+      ctx.fillStyle = color;
       ctx.textAlign = 'left';
-      ctx.fillText('목표가', 4, yy - 8);
+      ctx.fillText(lv.label || '', 4, yy - 8);
     }
 
     // 매수/매도 마커

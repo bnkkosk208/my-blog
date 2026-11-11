@@ -3,6 +3,16 @@ import { sma, rsiWilder } from './indicators.js';
 import { dayStartUtc } from './candles.js';
 
 export const STRATEGIES = {
+  dip: {
+    id: 'dip',
+    name: '조정 매수',
+    candle: 'days',
+    // 확정 기본값: 하락 10% 매수 · 익절 5% · 손절 30%
+    // 근거: BTC/USD 1분봉 2014~2026 백테스트에서 손절 있는 조합 중 두 기간(2014~20, 2021~26) 모두 1위(승률 약 94%, 본전 승률 86%)
+    defaults: { dropPct: 10, risePct: 5, stopPct: 30 },
+    minCandles: 2,
+    desc: '현재가가 전일 종가(업비트 일봉, KST 09:00 기준)보다 설정한 비율 이상 떨어지면 매수하고, 매수가 대비 설정한 비율 이상 오르면 익절, 설정한 비율 이상 떨어지면 손절합니다. 하루(일봉) 1회만 진입하고 보유 기간 제한은 없습니다. 기본값(익절 5%·손절 30%)은 승률이 높은 대신 한 번 손절하면 익절 약 6번분의 수익을 잃으므로 투자 비중을 함께 조절하세요. BTC 같은 대형 코인은 하루 10% 하락이 드물어 몇 주·몇 달 동안 매수가 없을 수 있습니다.'
+  },
   vb: {
     id: 'vb',
     name: '변동성 돌파',
@@ -31,6 +41,11 @@ export const STRATEGIES = {
 
 // 숫자 파라미터 범위 (UI 입력과 검증에 같이 사용)
 export const PARAM_SPECS = {
+  dip: [
+    { key: 'dropPct', label: '매수 하락폭(%)', min: 1, max: 50, step: 0.5 },
+    { key: 'risePct', label: '익절 상승폭(%)', min: 1, max: 100, step: 0.5 },
+    { key: 'stopPct', label: '손절 하락폭(%)', min: 1, max: 50, step: 0.5 }
+  ],
   vb: [
     { key: 'k', label: 'K', min: 0.1, max: 1, step: 0.05 }
   ],
@@ -47,13 +62,19 @@ export const PARAM_SPECS = {
 
 export const STRATEGY_UNITS = ['minutes/15', 'minutes/60', 'minutes/240', 'days'];
 
+// 가격 수신마다 판정하고 형성 중인 당일 일봉을 포함해 쓰는 전략(ma/rsi는 마감 캔들 기준)
+export function isPriceBased(strategyId) {
+  return strategyId === 'vb' || strategyId === 'dip';
+}
+
 export function candleUnitOf(strategyId, params = {}) {
-  if (strategyId === 'vb') return 'days';
+  if (isPriceBased(strategyId)) return 'days';
   return params.unit || STRATEGIES[strategyId].candle;
 }
 
 export function minCandlesFor(strategyId, params = {}) {
   if (strategyId === 'vb') return params.maFilter ? 6 : 2;
+  if (strategyId === 'dip') return 2;
   if (strategyId === 'ma') return (params.long || 20) + 1;
   // 직전·현재 RSI 두 값이 필요하다
   return (params.period || 14) + 2;
@@ -97,6 +118,25 @@ export function vbTarget(todayOpen, prevHigh, prevLow, k) {
   return todayOpen + (prevHigh - prevLow) * k;
 }
 
+// 조정 매수 가격선. 부동소수 오차로 정확히 −N% 경계가 어긋나지 않게 ×(100±N)/100 순서로 계산
+export function dipBuyLine(prevClose, dropPct) {
+  return (prevClose * (100 - dropPct)) / 100;
+}
+export function dipTakeProfit(entryPrice, risePct) {
+  return (entryPrice * (100 + risePct)) / 100;
+}
+export function dipStopLine(entryPrice, stopPct) {
+  return (entryPrice * (100 - stopPct)) / 100;
+}
+
+// 가격선 비교: 0.27 × 1.1 = 0.29700000000000004 같은 부동소수 오차로 정확한 경계값을 놓치지 않게 상대 오차 1e-12 허용
+export function atOrAbove(price, line) {
+  return price >= line - Math.abs(line) * 1e-12;
+}
+export function atOrBelow(price, line) {
+  return price <= line + Math.abs(line) * 1e-12;
+}
+
 function hold(reason, memo, indicators = {}) {
   return { action: 'hold', reason, memo, indicators };
 }
@@ -126,6 +166,40 @@ function evalVb({ candles, price, now, position, memo, params }) {
     return { action: 'buy', reason: '목표가 돌파', memo: m, indicators: ind };
   }
   return hold('목표가 대기', m, ind);
+}
+
+// 조정 매수(dip): 일봉(마지막에 당일 형성 캔들 포함) + 실시간 가격으로 판정
+// 매수가 = position.avgPrice(체결 평균가, 수수료 미포함 — 수수료는 position.cost에 따로 반영).
+// 따라서 익절·손절선은 수수료를 빼기 전 가격 기준이다.
+function evalDip({ candles, price, now, position, memo, params }) {
+  const m = { ...memo };
+  const day = dayStartUtc(now);
+  const { dropPct, risePct, stopPct } = params;
+  const today = candles[candles.length - 1];
+  const prev = candles[candles.length - 2];
+  const ind = {};
+  if (today && prev && today.t === day) {
+    ind.prevClose = prev.c;
+    ind.buyLine = dipBuyLine(prev.c, dropPct);
+  }
+  if (position) {
+    const entry = position.avgPrice;
+    ind.entry = entry;
+    ind.takeProfit = dipTakeProfit(entry, risePct);
+    ind.stopLine = dipStopLine(entry, stopPct);
+    if (typeof price === 'number' && price > 0) {
+      if (atOrAbove(price, ind.takeProfit)) return { action: 'sell', reason: `목표 수익 도달 +${risePct}%`, memo: m, indicators: ind };
+      if (atOrBelow(price, ind.stopLine)) return { action: 'sell', reason: `손절 −${stopPct}%`, memo: m, indicators: ind };
+    }
+    return hold('보유 중 · 익절/손절 대기', m, ind);
+  }
+  if (ind.prevClose == null) return hold('당일 일봉 대기', m, ind);
+  if (m.enteredDay === day) return hold('오늘 이미 진입함', m, ind);
+  if (typeof price === 'number' && price > 0 && atOrBelow(price, ind.buyLine)) {
+    m.enteredDay = day;
+    return { action: 'buy', reason: `전일 종가 대비 −${dropPct}% 조정`, memo: m, indicators: ind };
+  }
+  return hold('매수가격선 대기', m, ind);
 }
 
 function evalMa({ candles, position, memo, params }) {
@@ -173,14 +247,15 @@ function evalRsi({ candles, position, memo, params }) {
 }
 
 /**
- * @param {'vb'|'ma'|'rsi'} strategyId
+ * @param {'dip'|'vb'|'ma'|'rsi'} strategyId
  * @param {{candles, price, now, position, memo, params}} input
- *   candles: 과거→최신. ma/rsi는 마감 캔들만, vb는 마지막에 당일 형성 캔들 포함
+ *   candles: 과거→최신. ma/rsi는 마감 캔들만, dip/vb는 마지막에 당일 형성 캔들 포함
  * @returns {{action:'buy'|'sell'|'hold', reason:string, memo:object, indicators:object}}
  */
 export function evaluate(strategyId, input) {
   const base = { candles: [], memo: {}, position: null, ...input };
   base.params = { ...STRATEGIES[strategyId].defaults, ...(input.params || {}) };
+  if (strategyId === 'dip') return evalDip(base);
   if (strategyId === 'vb') return evalVb(base);
   if (strategyId === 'ma') return evalMa(base);
   if (strategyId === 'rsi') return evalRsi(base);
