@@ -366,9 +366,9 @@ const DIP_CANDLES = [
 ];
 const DIP_P = { dropPct: 10, risePct: 10, stopPct: 10 };
 
-test('조정 매수: 기본 전략·일봉·가격 기반, 기본값 10/10/10', () => {
+test('조정 매수: 기본 전략·일봉·가격 기반, 확정 기본값 하락 10 · 익절 5 · 손절 30', () => {
   eq(Object.keys(STRATEGIES)[0], 'dip');
-  eq(STRATEGIES.dip.defaults, DIP_P);
+  eq(STRATEGIES.dip.defaults, { dropPct: 10, risePct: 5, stopPct: 30 });
   eq(candleUnitOf('dip', {}), 'days');
   eq(isPriceBased('dip'), true);
   eq(isPriceBased('ma'), false);
@@ -570,9 +570,59 @@ test('백테스트(dip): 매도한 캔들에서는 재매수하지 않고, 매�
   eq(r.trades[r.trades.length - 1].open, true);
 });
 
+test('백테스트(dip): 시가가 이미 선 아래로 갭이면 선이 아닌 시가에 체결(낙관적 체결 방지)', () => {
+  const candles = [
+    { t: T0, o: 100, h: 100, l: 100, c: 100 },
+    { t: T0 + D, o: 85, h: 86, l: 84, c: 86 }, // 매수가격선 90보다 시가 85가 낮음 → 85 매수
+    { t: T0 + 2 * D, o: 70, h: 72, l: 69, c: 71 } // 손절선 76.5보다 시가 70이 낮음 → 70 매도
+  ];
+  const r = runBacktest(candles, 'dip', DIP_P, { feeRate: 0 });
+  eq(r.markers.map((m) => [m.side, m.price]), [['buy', 85], ['sell', 70]]);
+  const up = [
+    { t: T0, o: 100, h: 100, l: 100, c: 100 },
+    { t: T0 + D, o: 100, h: 100, l: 90, c: 92 }, // 90 매수
+    { t: T0 + 2 * D, o: 105, h: 106, l: 104, c: 105 } // 익절선 99보다 시가 105가 높음 → 105 매도(실시간 봇도 첫 틱에 매도)
+  ];
+  const r2 = runBacktest(up, 'dip', DIP_P, { feeRate: 0 });
+  eq(r2.markers.map((m) => [m.side, m.price]), [['buy', 90], ['sell', 105]]);
+});
+
+test('엔진(dip, 실거래 경로): 익절 매도 수량은 계좌 잔고가 더 많아도 봇이 산 수량까지만', async () => {
+  const candles = DIP_CANDLES.map((c) => ({ ...c }));
+  let now = T0 + D + 10 * 1000;
+  let price = 90000000;
+  const sells = [];
+  // 사용자가 원래 1 BTC를 들고 있는 계좌를 흉내 낸 가짜 LiveBroker(네트워크·실주문 없음)
+  const broker = {
+    kind: 'live',
+    async getChance() { return { bidFee: 0.0005 }; },
+    async getBalance() { return { krw: 1000000, coins: { BTC: { qty: 1.001 } } }; },
+    async marketBuy(market, krw, p) { return { qty: floor8(krw / p), price: p, krw, fee: krw * 0.0005 }; },
+    async marketSell(market, qty, p) { sells.push(qty); return { qty, price: p, krw: qty * p, fee: qty * p * 0.0005 }; }
+  };
+  const engine = new BotEngine({ broker, mode: 'live', getCandles: async () => candles, getPrice: () => price, now: () => now });
+  engine.configure({ market: 'KRW-BTC', strategyId: 'dip', params: DIP_P, invest: { type: 'fixed', amount: 90000 } });
+  await engine.start();
+  eq(engine.status, 'holding');
+  const botQty = engine.state.position.qty;
+  eq(botQty, 0.001);
+  price = 99000000;
+  now += 2000;
+  await engine.evaluate('price');
+  eq(engine.state.position, null);
+  eq(sells, [botQty]);
+});
+
 // Node에서는 node:test로 등록
 const isNode = typeof process !== 'undefined' && !!process.versions?.node;
 if (isNode) {
   const { test: nodeTest } = await import('node:test');
   for (const c of cases) nodeTest(c.name, c.fn);
 }
+
+test('조정 매수: 확정 기본값(10/5/30) 경계 — 매수 90,000,000 · 익절 94,500,000 · 손절 63,000,000', () => {
+  eq(dipBuyLine(100000000, 10), 90000000);
+  eq(dipTakeProfit(90000000, 5), 94500000);
+  eq(dipStopLine(90000000, 30), 63000000);
+  eq(validateParams('dip', STRATEGIES.dip.defaults).ok, true);
+});
