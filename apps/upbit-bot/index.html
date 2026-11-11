@@ -237,6 +237,10 @@
     <button type="button" class="link-btn" id="risk-more">자세히</button>
   </footer>
   <p class="file-hint small muted" id="file-hint" hidden>이 페이지는 <code>file://</code>로는 동작하지 않습니다. 로컬에서는 <code>python -m http.server</code> 또는 <code>node server/server.js</code>로 여세요.</p>
+  <script>
+    // 모듈 스크립트는 file://에서 실행되지 않으므로 일반 스크립트로 안내를 띄운다
+    if (location.protocol === 'file:') document.getElementById('file-hint').hidden = false;
+  </script>
   <noscript><p class="file-hint">이 앱은 JavaScript가 필요합니다. 로컬에서는 <code>python -m http.server</code> 또는 <code>node server/server.js</code>로 여세요.</p></noscript>
 
   <dialog id="risk-dialog" class="dialog" aria-labelledby="risk-dialog-title">
