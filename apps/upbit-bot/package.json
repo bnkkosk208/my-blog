@@ -1,0 +1,15 @@
+{
+  "name": "upbit-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "업비트 자동매매 봇 (모의투자 + 각자 설치형 로컬 서버 실거래). 외부 의존성 없음",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test tests/lib.test.js tests/server.test.js",
+    "start": "node server/server.js",
+    "sign-check": "node server/sign-check.js"
+  }
+}

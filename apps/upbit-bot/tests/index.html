@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>업비트 봇 계산 테스트</title>
+  <style>
+    :root { --bg: #fff; --text: #1f2328; --muted: #59636e; --border: #e3e6ea; --ok: #13915f; --bad: #c62828; color-scheme: light; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #16181c; --text: #e6e8eb; --muted: #9aa3ad; --border: #2c3139; --ok: #3ccf8e; --bad: #ff5252; color-scheme: dark; }
+    }
+    body { margin: 0; padding: 16px; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+    h1 { font-size: 1.2rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    th, td { text-align: left; padding: 6px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+    .ok { color: var(--ok); font-weight: 700; }
+    .bad { color: var(--bad); font-weight: 700; }
+    .muted { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <h1>업비트 봇 계산 테스트 (spec 8장)</h1>
+  <p id="summary" class="muted">실행 중…</p>
+  <table>
+    <thead><tr><th>결과</th><th>케이스</th><th>메시지</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <p class="muted">Node에서는 <code>node --test apps/upbit-bot/tests/lib.test.js</code>로 실행합니다.</p>
+  <script type="module">
+    import { cases } from './lib.test.js';
+    const rows = document.getElementById('rows');
+    let pass = 0;
+    for (const c of cases) {
+      const tr = document.createElement('tr');
+      const r = document.createElement('td');
+      const n = document.createElement('td');
+      const m = document.createElement('td');
+      n.textContent = c.name;
+      try {
+        await c.fn();
+        r.textContent = '통과';
+        r.className = 'ok';
+        pass += 1;
+      } catch (e) {
+        r.textContent = '실패';
+        r.className = 'bad';
+        m.textContent = e.message;
+      }
+      tr.append(r, n, m);
+      rows.append(tr);
+    }
+    const s = document.getElementById('summary');
+    s.textContent = `${cases.length}개 중 ${pass}개 통과`;
+    s.className = pass === cases.length ? 'ok' : 'bad';
+  </script>
+</body>
+</html>
