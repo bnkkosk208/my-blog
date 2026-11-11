@@ -5,14 +5,16 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { loadEnv } from './env.js';
+import { loadEnv, setEnvValue } from './env.js';
 import { buildQuery, makeJwt, decodeJwtUnsigned } from './upbit-auth.js';
 
 export const VERSION = '1.0.0';
 // 공식 문서 확인 필요(spec 11장 5번): 미체결 조회 경로, 주문 엔드포인트
 const UPBIT_API = 'https://api.upbit.com';
 const OPEN_ORDERS_PATH = '/v1/orders/open';
-const PAGES_ORIGIN = 'https://bnkkosk208.github.io';
+// 키 목록·만료일 조회 — 공식 문서 확인 필요
+const API_KEYS_PATH = '/v1/api_keys';
+const KEY_EXPIRE_WARN_DAYS = 14;
 const MIN_ORDER_KRW = 5000;
 const MAX_BODY = 4 * 1024;
 const UPSTREAM_TIMEOUT_MS = 10000;
@@ -35,6 +37,13 @@ const MIME = {
 };
 
 const isPlaceholder = (v) => !v || v.startsWith('여기에');
+// 'https://example.github.io' 처럼 경로 없는 https 출처만 허용
+const ORIGIN_RE = /^https:\/\/[a-z0-9.-]+(:\d{1,5})?$/;
+
+export function parsePagesOrigin(v) {
+  const o = String(v || '').trim().replace(/\/$/, '').toLowerCase();
+  return ORIGIN_RE.test(o) ? o : '';
+}
 
 export function loadConfig(env) {
   const port = Number(env.PORT) || 8787;
@@ -45,10 +54,13 @@ export function loadConfig(env) {
     secretKey: env.UPBIT_SECRET_KEY || '',
     keyConfigured: !isPlaceholder(env.UPBIT_ACCESS_KEY) && !isPlaceholder(env.UPBIT_SECRET_KEY),
     maxOrderKrw: Number(env.MAX_ORDER_KRW) || 50000,
-    dailyMaxOrders: Number(env.DAILY_MAX_ORDERS) || 20,
-    allowedMarkets: String(env.ALLOWED_MARKETS || 'KRW-BTC,KRW-ETH').split(',').map((s) => s.trim()).filter(Boolean),
+    dailyMaxOrders: Number(env.DAILY_MAX_ORDERS) || 10,
+    allowedMarkets: String(env.ALLOWED_MARKETS || 'KRW-BTC').split(',').map((s) => s.trim()).filter(Boolean),
     localToken: env.LOCAL_TOKEN || crypto.randomBytes(24).toString('base64url'),
-    allowPagesOrigin: String(env.ALLOW_PAGES_ORIGIN || 'false').toLowerCase() === 'true'
+    pagesOrigin: parsePagesOrigin(env.ALLOWED_PAGES_ORIGIN),
+    get allowPagesOrigin() {
+      return !!this.pagesOrigin;
+    }
   };
 }
 
@@ -87,9 +99,9 @@ export function createApp(config, { fetchImpl = globalThis.fetch, log = console.
   const fail = (res, status, code, message, headers) => send(res, status, { ok: false, status, code, message }, headers);
 
   function corsHeaders(origin) {
-    if (config.allowPagesOrigin && origin === PAGES_ORIGIN) {
+    if (config.pagesOrigin && origin === config.pagesOrigin) {
       return {
-        'Access-Control-Allow-Origin': PAGES_ORIGIN,
+        'Access-Control-Allow-Origin': config.pagesOrigin,
         Vary: 'Origin',
         'Access-Control-Allow-Headers': 'Content-Type, X-Local-Token',
         'Access-Control-Allow-Methods': 'GET, POST, DELETE',
@@ -309,7 +321,8 @@ export function createApp(config, { fetchImpl = globalThis.fetch, log = console.
           maxOrderKrw: config.maxOrderKrw,
           dailyMaxOrders: config.dailyMaxOrders,
           allowedMarkets: config.allowedMarkets,
-          allowPagesOrigin: config.allowPagesOrigin
+          allowPagesOrigin: config.allowPagesOrigin,
+          keyExpireAt: config.keyExpireAt || null
         }, cors);
       }
       if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url, cors);
@@ -323,16 +336,95 @@ export function createApp(config, { fetchImpl = globalThis.fetch, log = console.
   return server;
 }
 
+function restrictFile(file) {
+  try {
+    fs.chmodSync(file, 0o600); // Windows에서는 효과가 제한적
+  } catch (e) {
+    // 무시
+  }
+}
+
+// 첫 실행: .env가 없으면 .env.example을 복사하고 안내 후 종료
+export function ensureEnvFile(envFile, exampleFile) {
+  if (fs.existsSync(envFile)) {
+    restrictFile(envFile);
+    return true;
+  }
+  fs.copyFileSync(exampleFile, envFile);
+  restrictFile(envFile);
+  return false;
+}
+
+// 키 만료일 확인 (조회 전용). 키 값은 출력하지 않는다
+export async function checkKeyExpiry(config, fetchImpl = globalThis.fetch, now = Date.now()) {
+  try {
+    const jwt = makeJwt({ accessKey: config.accessKey, secretKey: config.secretKey });
+    const r = await fetchImpl(`${UPBIT_API}${API_KEYS_PATH}`, {
+      headers: { Authorization: `Bearer ${jwt}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
+    });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) return { level: 'warn', message: `키 확인 실패: ${data?.error?.name || r.status} (권한·허용 IP를 확인하세요)` };
+    const mine = (Array.isArray(data) ? data : []).find((k) => k.access_key === config.accessKey);
+    if (!mine || !mine.expire_at) return { level: 'warn', message: '키 만료일을 확인하지 못했습니다' };
+    const exp = Date.parse(mine.expire_at);
+    config.keyExpireAt = mine.expire_at;
+    const days = Math.floor((exp - now) / 86400000);
+    if (days < 0) return { level: 'error', message: `API 키가 만료되었습니다(${mine.expire_at}). 업비트에서 새로 발급하세요` };
+    if (days <= KEY_EXPIRE_WARN_DAYS) return { level: 'warn', message: `API 키가 ${days}일 후 만료됩니다(${mine.expire_at})` };
+    return { level: 'ok', message: `API 키 만료일: ${mine.expire_at}` };
+  } catch (e) {
+    return { level: 'warn', message: '키 확인 실패: 업비트 서버에 연결할 수 없습니다' };
+  }
+}
+
 export function start() {
-  const env = loadEnv(path.join(SERVER_DIR, '.env'));
+  const envFile = path.join(SERVER_DIR, '.env');
+  if (!ensureEnvFile(envFile, path.join(SERVER_DIR, '.env.example'))) {
+    console.log('처음 실행이라 설정 파일(.env)을 만들었습니다.');
+    console.log(`  ${envFile}`);
+    console.log('메모장 등으로 .env를 열어 UPBIT_ACCESS_KEY, UPBIT_SECRET_KEY에 본인 키를 넣고 다시 실행하세요.');
+    console.log('키를 넣지 않아도 다시 실행하면 모의투자 화면은 쓸 수 있습니다.');
+    console.log('API 키 권한은 "자산조회"와 "주문하기"만 체크하세요. 출금 권한은 절대 체크하지 마세요.');
+    process.exitCode = 0;
+    return null;
+  }
+  const env = loadEnv(envFile);
+  let newToken = false;
+  if (!env.LOCAL_TOKEN) {
+    env.LOCAL_TOKEN = crypto.randomBytes(24).toString('base64url');
+    try {
+      setEnvValue(envFile, 'LOCAL_TOKEN', env.LOCAL_TOKEN);
+      restrictFile(envFile);
+      newToken = true;
+    } catch (e) {
+      console.log('경고: .env에 토큰을 저장하지 못했습니다. 이번 실행에만 쓰는 토큰을 만듭니다.');
+      newToken = true;
+    }
+  }
   const config = loadConfig(env);
   const server = createApp(config);
-  server.listen(config.port, '127.0.0.1', () => {
+  server.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') console.log(`포트 ${config.port}이(가) 이미 사용 중입니다. 서버가 이미 켜져 있는지 확인하거나 .env의 PORT를 바꾸세요.`);
+    else console.log(`서버 시작 실패: ${e.code || e.name}`);
+    process.exitCode = 1;
+  });
+  server.listen(config.port, '127.0.0.1', async () => {
     console.log(`업비트 자동매매 봇 로컬 서버 v${VERSION}`);
-    console.log(`http://127.0.0.1:${config.port}/ 에서 앱을 여세요`);
-    console.log(`로컬 토큰: ${config.localToken}`);
+    console.log(`브라우저에서 http://127.0.0.1:${config.port}/ 을 여세요`);
+    if (newToken) {
+      console.log(`로컬 토큰(처음 한 번만 표시, .env의 LOCAL_TOKEN에 저장됨): ${config.localToken}`);
+    } else {
+      console.log('로컬 토큰: .env 파일의 LOCAL_TOKEN 값을 실거래 진입 화면에 입력하세요');
+    }
     console.log(`DRY_RUN: ${config.dryRun ? 'true (업비트로 주문을 보내지 않음)' : 'false (실제 주문!)'}`);
-    console.log(`API 키 설정: ${config.keyConfigured ? '예' : '아니오'} · 허용 마켓: ${config.allowedMarkets.join(', ')} · 1회 최대 ${config.maxOrderKrw}원`);
+    console.log(`API 키 설정: ${config.keyConfigured ? '예' : '아니오'} · 허용 마켓: ${config.allowedMarkets.join(', ')} · 1회 최대 ${config.maxOrderKrw}원 · 하루 ${config.dailyMaxOrders}회`);
+    if (config.pagesOrigin) console.log(`추가 허용 출처: ${config.pagesOrigin}`);
+    console.log('이 프로그램은 본인 계좌·본인 판단·본인 책임으로 사용하는 도구이며 수익을 보장하지 않습니다.');
+    if (!config.dryRun && config.keyConfigured) {
+      const r = await checkKeyExpiry(config);
+      console.log(`${r.level === 'ok' ? '' : '경고: '}${r.message}`);
+    }
   });
   return server;
 }

@@ -278,6 +278,7 @@ h1, h2, h3 { line-height: 1.3; }
   padding: 4px var(--gutter); font-size: 0.78rem; color: var(--text-muted);
   background: var(--bg-subtle); border-top: 1px solid var(--border); text-align: center;
 }
+.risk-bar .version { opacity: 0.8; }
 .risk-bar .link-btn { min-height: 32px; padding: 6px; margin: -6px 0; }
 .file-hint { max-width: 960px; margin: 8px auto; padding: 0 var(--gutter); }
 .risk-text { font-size: 0.88rem; }

@@ -212,7 +212,7 @@
         <button type="button" class="btn" id="reset-paper-btn">모의 계좌 초기화 (1,000,000원)</button>
 
         <h3 class="sub-title">로컬 서버 연결 (실거래)</h3>
-        <p class="small">실거래는 PC에서 <code>apps/upbit-bot/server</code>를 실행하고 <code>http://127.0.0.1:8787/</code>로 이 앱을 열었을 때만 쓸 수 있습니다. 자세한 방법은 server 폴더의 README를 보세요.</p>
+        <p class="small">실거래는 각자 자기 PC에 <code>apps/upbit-bot</code> 폴더를 내려받아 <code>server</code>를 실행하고, <code>http://127.0.0.1:8787/</code>로 이 앱을 열었을 때만 쓸 수 있습니다. 본인 API 키는 본인 PC의 <code>server/.env</code>에만 넣습니다. 설치 방법은 server 폴더의 README를 보세요.</p>
         <label class="field">
           <span class="field-label">서버 주소 (비우면 현재 주소)</span>
           <input class="input" id="server-base" placeholder="http://127.0.0.1:8787" autocomplete="off">
@@ -224,7 +224,11 @@
         <p class="small muted" id="server-detail"></p>
 
         <h3 class="sub-title">데이터</h3>
-        <button type="button" class="btn danger" id="clear-data-btn">저장 데이터 전체 삭제</button>
+        <p class="small muted">설정·모의 계좌·로그·봇 상태는 <strong>이 브라우저에만 저장됨</strong> — 서버나 다른 사람에게 전송되지 않으며, 다른 브라우저·기기와 공유되지 않습니다. API 키는 브라우저에 저장하지 않습니다.</p>
+        <div class="bot-buttons">
+          <button type="button" class="btn" id="reset-settings-btn">설정 초기화</button>
+          <button type="button" class="btn danger" id="clear-data-btn">저장 데이터 전체 삭제</button>
+        </div>
 
         <h3 class="sub-title">투자 위험 고지</h3>
         <div class="risk-text" id="risk-full"></div>
@@ -235,6 +239,7 @@
   <footer class="risk-bar">
     <span>모의투자용 학습 도구입니다. 수익을 보장하지 않으며 실거래 손실 책임은 사용자에게 있습니다.</span>
     <button type="button" class="link-btn" id="risk-more">자세히</button>
+    <span class="version" id="app-version"></span>
   </footer>
   <p class="file-hint small muted" id="file-hint" hidden>이 페이지는 <code>file://</code>로는 동작하지 않습니다. 로컬에서는 <code>python -m http.server</code> 또는 <code>node server/server.js</code>로 여세요.</p>
   <script>
@@ -270,6 +275,7 @@
       <label class="check block"><input type="checkbox" data-live-check> 실제 자산으로 주문이 나갑니다</label>
       <label class="check block"><input type="checkbox" data-live-check> 손실은 전적으로 제 책임입니다</label>
       <label class="check block"><input type="checkbox" data-live-check> API 키에 출금 권한이 없음을 확인했습니다</label>
+      <label class="check block"><input type="checkbox" data-live-check> 본인 계좌·본인 PC의 키로 사용하며, 배포자는 투자 손실과 키 관리에 책임지지 않음에 동의합니다</label>
       <div class="dialog-actions"><button type="button" class="btn primary" id="live-next-2" disabled>다음</button></div>
     </div>
     <div id="live-step-3" hidden>

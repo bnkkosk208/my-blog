@@ -26,3 +26,11 @@ export function loadEnv(file) {
   }
   return { ...fromFile, ...process.env };
 }
+
+// .env의 KEY=값 한 줄을 바꾸거나(없으면) 끝에 추가한다
+export function setEnvValue(file, key, value) {
+  const text = fs.readFileSync(file, 'utf8');
+  const re = new RegExp(`^\\s*${key}\\s*=.*$`, 'm');
+  const next = re.test(text) ? text.replace(re, `${key}=${value}`) : `${text.replace(/\n?$/, '\n')}${key}=${value}\n`;
+  fs.writeFileSync(file, next, { mode: 0o600 });
+}

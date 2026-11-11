@@ -12,11 +12,14 @@ import { createChart } from './ui/chart.js';
 import * as V from './ui/views.js';
 import { isServedLocally, isTopWindow, createServerMonitor, chipText, openLiveDialog } from './ui/live-gate.js';
 
+export const APP_VERSION = '1.0.0';
+
 const RISK_TEXT = [
   '이 앱은 개인 학습·실험용으로 만든 도구이며 투자 권유나 자문이 아닙니다. 가상자산은 가격 변동이 매우 크고 원금 전액을 잃을 수 있습니다.',
   '앱에 포함된 전략(변동성 돌파, 이동평균 교차, RSI)과 백테스트 결과는 과거 데이터에 기반한 것으로 미래 수익을 보장하지 않습니다.',
   '실거래 모드에서 발생하는 모든 주문과 그 결과(손실, 수수료, 프로그램 오류·네트워크 장애·거래소 장애로 인한 손해 포함)에 대한 책임은 전적으로 사용자에게 있습니다.',
-  'API 키는 본인 PC에만 보관하고, 출금 권한을 절대 부여하지 마십시오.',
+  '이 프로그램은 각 사용자가 자기 PC에 직접 설치해 본인 계좌·본인 API 키로 쓰는 도구입니다. 모든 거래는 본인 판단이며 책임도 본인에게 있습니다. 배포자는 사용자의 API 키·자산에 접근하지 않으며, 투자 손실이나 키 관리 소홀로 생긴 손해에 책임지지 않습니다.',
+  'API 키는 본인 PC의 server/.env에만 보관하고, 출금 권한을 절대 부여하지 마십시오. 유출이 의심되면 즉시 업비트에서 키를 삭제하십시오.',
   '이 앱은 업비트(두나무)와 관련이 없는 비공식 도구입니다.'
 ];
 
@@ -840,6 +843,17 @@ function initBotButtons() {
     renderStatus();
   });
 
+  $('reset-settings-btn').addEventListener('click', async () => {
+    if (engine.running) {
+      await confirmDialog('설정 초기화', ['봇을 정지한 뒤에 초기화할 수 있습니다.'], { cancel: false });
+      return;
+    }
+    const ok = await confirmDialog('설정 초기화', ['마켓·전략·파라미터·투자 금액·안전장치를 기본값으로 되돌리고 새로고침합니다. 모의 계좌와 로그는 유지됩니다.'], { okLabel: '초기화' });
+    if (!ok) return;
+    store.remove('settings');
+    location.reload();
+  });
+
   $('clear-data-btn').addEventListener('click', async () => {
     const ok = await confirmDialog('저장 데이터 전체 삭제', ['설정·모의 계좌·로그·봇 상태를 모두 지우고 새로고침합니다. (API 키는 원래 저장하지 않습니다)'], { okLabel: '삭제', danger: true });
     if (!ok) return;
@@ -911,7 +925,7 @@ function renderServerChip() {
   const elig = liveEligibility();
   $('mode-live').setAttribute('aria-disabled', String(!elig.ok && app.mode !== 'live'));
   $('server-detail').textContent = s.reachable
-    ? `서버 v${s.version} · ${s.dryRun ? 'DRY-RUN(주문 미전송)' : '실주문'} · 키 ${s.keyConfigured ? '설정됨' : '없음'} · 서버 1회 최대 ${V.fmtKrw(s.maxOrderKrw)} · 허용 마켓 ${(s.allowedMarkets || []).join(', ')}`
+    ? `서버 v${s.version} · ${s.dryRun ? 'DRY-RUN(주문 미전송)' : '실주문'} · 키 ${s.keyConfigured ? '설정됨' : '없음'}${s.keyExpireAt ? `(만료 ${String(s.keyExpireAt).slice(0, 10)})` : ''} · 서버 1회 최대 ${V.fmtKrw(s.maxOrderKrw)} · 하루 ${s.dailyMaxOrders}회 · 허용 마켓 ${(s.allowedMarkets || []).join(', ')}`
     : s.disabled ? '현재 주소에서는 로컬 서버를 확인하지 않습니다.' : '로컬 서버 응답 없음';
 }
 
@@ -1037,6 +1051,7 @@ function init() {
   $('risk-more').addEventListener('click', () => $('risk-dialog').showModal());
   $('risk-close').addEventListener('click', () => $('risk-dialog').close());
   $('storage-chip').hidden = store.available;
+  $('app-version').textContent = `v${APP_VERSION}`;
 
   initTheme();
   initTabs();
