@@ -155,6 +155,9 @@ export function renderBacktest(container, r, unitLabel) {
       stat('최종 자산', fmtKrw(r.finalEquity))
     ])
   );
+  if (r.assumptions?.length) {
+    container.append(el('p', { class: 'muted small', text: '체결 가정' }), el('ul', { class: 'muted small bt-assumptions' }, r.assumptions.map((t) => el('li', { text: t }))));
+  }
   if (!r.trades.length) {
     container.append(el('p', { class: 'muted', text: '이 기간에는 거래가 없었습니다.' }));
     return;

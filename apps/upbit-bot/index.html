@@ -82,7 +82,8 @@
         <p class="legend small muted">
           <span class="lg lg-ma1"></span><span id="legend-ma1">단기 MA</span>
           <span class="lg lg-ma2"></span><span id="legend-ma2">장기 MA</span>
-          <span class="lg lg-target"></span>목표가
+          <span class="lg-group" id="legend-vb" hidden><span class="lg lg-target"></span>목표가</span>
+          <span class="lg-group" id="legend-dip"><span class="lg lg-target"></span>매수가격선 <span class="lg lg-tp"></span>익절선 <span class="lg lg-stop"></span>손절선</span>
           <span class="up">▲</span>매수 <span class="down">▼</span>매도
         </p>
       </section>
@@ -102,7 +103,8 @@
           <div class="field">
             <span class="field-label" id="strategy-label">전략</span>
             <div class="radio-row" role="radiogroup" aria-labelledby="strategy-label">
-              <label class="radio"><input type="radio" name="strategy" value="vb" checked> 변동성 돌파</label>
+              <label class="radio"><input type="radio" name="strategy" value="dip" checked> 조정 매수</label>
+              <label class="radio"><input type="radio" name="strategy" value="vb"> 변동성 돌파</label>
               <label class="radio"><input type="radio" name="strategy" value="ma"> 이동평균</label>
               <label class="radio"><input type="radio" name="strategy" value="rsi"> RSI</label>
             </div>

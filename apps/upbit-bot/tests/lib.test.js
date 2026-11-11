@@ -1,6 +1,6 @@
 // spec 8장 계산 케이스. Node: `node --test apps/upbit-bot/tests/` / 브라우저: tests/index.html
 import { sma, rsiWilder, round } from '../lib/indicators.js';
-import { evaluate, validateParams, rsiCross, vbTarget } from '../lib/strategies.js';
+import { evaluate, validateParams, rsiCross, vbTarget, dipBuyLine, dipTakeProfit, dipStopLine, candleUnitOf, isPriceBased, STRATEGIES } from '../lib/strategies.js';
 import { normalizeCandles, closedOnly, nextCloseTime, isClosed } from '../lib/candles.js';
 import { calcOrderKrw, floor8, tickSize, roundToTick, simulateBuy, simulateSell, realizedPnl, canSell } from '../lib/market-rules.js';
 import { PaperBroker } from '../lib/brokers.js';
@@ -357,6 +357,217 @@ test('LiveBroker: 체결 조회가 계속 실패하면 unconfirmed(포지션 누
   err = null;
   try { await b2.marketBuy('KRW-BTC', 10000, 50000000); } catch (e) { err = e; }
   eq(err?.code, 'unconfirmed');
+});
+
+// 조정 매수(dip)
+const DIP_CANDLES = [
+  { t: T0, o: 99000000, h: 101000000, l: 97000000, c: 100000000 }, // 전일 종가 100,000,000
+  { t: T0 + D, o: 100000000, h: 100500000, l: 95000000, c: 96000000 } // 당일 형성 캔들
+];
+const DIP_P = { dropPct: 10, risePct: 10, stopPct: 10 };
+
+test('조정 매수: 기본 전략·일봉·가격 기반, 기본값 10/10/10', () => {
+  eq(Object.keys(STRATEGIES)[0], 'dip');
+  eq(STRATEGIES.dip.defaults, DIP_P);
+  eq(candleUnitOf('dip', {}), 'days');
+  eq(isPriceBased('dip'), true);
+  eq(isPriceBased('ma'), false);
+  eq(STRATEGIES.dip.desc.includes('몇 주·몇 달'), true);
+});
+
+test('조정 매수: 매수가격선·익절선·손절선 계산(정확한 경계값)', () => {
+  eq(dipBuyLine(100000000, 10), 90000000);
+  eq(dipBuyLine(98000000, 10), 88200000);
+  eq(dipBuyLine(0.3, 10), 0.27);
+  eq(dipTakeProfit(90000000, 10), 99000000);
+  eq(dipStopLine(90000000, 10), 81000000);
+  approx(dipTakeProfit(0.27, 10), 0.297, 1e-12);
+  approx(dipStopLine(0.27, 10), 0.243, 1e-12);
+  // 부동소수 오차(0.29700000000000004)가 있어도 정확히 경계 가격이면 익절
+  const small = { qty: 1000, avgPrice: 0.27, enteredAt: T0 + D + H };
+  const r = evaluate('dip', { candles: DIP_CANDLES, price: 0.297, now: T0 + D + 2 * H, position: small, memo: {}, params: DIP_P });
+  eq(r.action, 'sell');
+});
+
+test('조정 매수: −10% 경계 — 90,000,001 hold, 정확히 90,000,000 buy, 지표 표시', () => {
+  const now = T0 + D + 3 * H;
+  const r1 = evaluate('dip', { candles: DIP_CANDLES, price: 90000001, now, position: null, memo: {}, params: DIP_P });
+  eq(r1.action, 'hold');
+  eq(r1.indicators.prevClose, 100000000);
+  eq(r1.indicators.buyLine, 90000000);
+  const r2 = evaluate('dip', { candles: DIP_CANDLES, price: 90000000, now, position: null, memo: r1.memo, params: DIP_P });
+  eq(r2.action, 'buy');
+  eq(r2.reason, '전일 종가 대비 −10% 조정');
+  eq(r2.memo.enteredDay, T0 + D);
+});
+
+test('조정 매수: 당일 일봉이 아직 없으면 매수하지 않음', () => {
+  const r = evaluate('dip', { candles: DIP_CANDLES, price: 50000000, now: T0 + 2 * D + 1000, position: null, memo: {}, params: DIP_P });
+  eq(r.action, 'hold');
+  eq(r.reason, '당일 일봉 대기');
+});
+
+test('조정 매수: 익절·손절 경계(매수가 90,000,000 → 99,000,000 / 81,000,000)', () => {
+  const now = T0 + D + 5 * H;
+  const pos = { qty: 0.001, avgPrice: 90000000, enteredAt: T0 + D + 3 * H };
+  const at = (price) => evaluate('dip', { candles: DIP_CANDLES, price, now, position: pos, memo: {}, params: DIP_P });
+  eq(at(98999999).action, 'hold');
+  const tp = at(99000000);
+  eq(tp.action, 'sell');
+  eq(tp.reason, '목표 수익 도달 +10%');
+  eq(tp.indicators.takeProfit, 99000000);
+  eq(tp.indicators.stopLine, 81000000);
+  eq(at(81000001).action, 'hold');
+  const sl = at(81000000);
+  eq(sl.action, 'sell');
+  eq(sl.reason, '손절 −10%');
+});
+
+test('조정 매수: 보유 기간 제한 없음(다음날에도 자동 청산 안 함)', () => {
+  const pos = { qty: 0.001, avgPrice: 90000000, enteredAt: T0 + D + 3 * H };
+  const r = evaluate('dip', { candles: DIP_CANDLES, price: 90000000, now: T0 + 5 * D, position: pos, memo: {}, params: DIP_P });
+  eq(r.action, 'hold');
+});
+
+test('조정 매수: 같은 날 재진입 금지(손절 직후 재매수 없음), 다음날은 다시 진입', () => {
+  const now = T0 + D + 3 * H;
+  const r1 = evaluate('dip', { candles: DIP_CANDLES, price: 89000000, now, position: null, memo: {}, params: DIP_P });
+  eq(r1.action, 'buy');
+  const pos = { qty: 0.001, avgPrice: 89000000, enteredAt: now };
+  const r2 = evaluate('dip', { candles: DIP_CANDLES, price: 80000000, now: now + H, position: pos, memo: r1.memo, params: DIP_P });
+  eq(r2.action, 'sell');
+  const r3 = evaluate('dip', { candles: DIP_CANDLES, price: 80000000, now: now + 2 * H, position: null, memo: r2.memo, params: DIP_P });
+  eq(r3.action, 'hold');
+  eq(r3.reason, '오늘 이미 진입함');
+  const next = [...DIP_CANDLES, { t: T0 + 2 * D, o: 80000000, h: 80000000, l: 70000000, c: 71000000 }];
+  const r4 = evaluate('dip', { candles: next, price: 71000000, now: T0 + 2 * D + H, position: null, memo: r3.memo, params: DIP_P });
+  eq(r4.indicators.buyLine, 86400000);
+  eq(r4.action, 'buy');
+});
+
+test('조정 매수 파라미터 검증', () => {
+  eq(validateParams('dip', DIP_P).ok, true);
+  eq(validateParams('dip', { ...DIP_P, dropPct: 0 }).ok, false);
+  eq(validateParams('dip', { ...DIP_P, dropPct: 51 }).ok, false);
+  eq(validateParams('dip', { ...DIP_P, risePct: 100 }).ok, true);
+  eq(validateParams('dip', { ...DIP_P, risePct: 101 }).ok, false);
+  eq(validateParams('dip', { ...DIP_P, stopPct: NaN }).ok, false);
+});
+
+test('엔진(dip): 가격 틱으로 매수 → 익절 매도, 같은 날 재매수 없음, 다음날 자동 청산 없음', async () => {
+  const candles = DIP_CANDLES.map((c) => ({ ...c }));
+  let now = T0 + D + 10 * 1000;
+  let price = 95000000;
+  const account = { krw: 1000000, coins: {}, initialKrw: 1000000, createdAt: T0 };
+  const broker = new PaperBroker({ load: () => account, getPrice: () => price, now: () => now });
+  const logs = [];
+  const engine = new BotEngine({ broker, mode: 'paper', getCandles: async () => candles, getPrice: () => price, now: () => now });
+  engine.addEventListener('log', (e) => logs.push(e.detail));
+  engine.configure({ market: 'KRW-BTC', strategyId: 'dip', params: DIP_P, invest: { type: 'fixed', amount: 100000 } });
+  eq(engine.unit, 'days');
+  await engine.start();
+  eq(engine.state.position, null);
+  eq(engine.nextEvalAt, T0 + 2 * D + 5000);
+  price = 90000000;
+  now += 2000;
+  await engine.evaluate('price');
+  eq(engine.status, 'holding');
+  eq(engine.state.position.avgPrice, 90000000);
+  // 다음날로 넘어가도(vb와 달리) 청산하지 않음
+  candles.push({ t: T0 + 2 * D, o: 91000000, h: 91000000, l: 91000000, c: 91000000 });
+  now = T0 + 2 * D + 6000;
+  price = 91000000;
+  await engine.heartbeat();
+  eq(engine.status, 'holding');
+  price = 99000000;
+  now += 2000;
+  await engine.evaluate('price');
+  eq(engine.state.position, null);
+  eq(logs.some((l) => l.kind === 'sell' && l.msg.includes('목표 수익 도달 +10%')), true);
+  // 익절 후 같은 날 매수가격선(전일 종가 96,000,000 × 0.9 = 86,400,000) 이하 → 이 날은 아직 진입 전이므로 매수
+  price = 81000000;
+  now += 2000;
+  await engine.evaluate('price');
+  eq(engine.status, 'holding');
+  // 손절 후 같은 날 재매수 없음
+  price = 72000000;
+  now += 2000;
+  await engine.evaluate('price');
+  eq(engine.state.position, null);
+  eq(logs.some((l) => l.kind === 'sell' && l.msg.includes('손절 −10%')), true);
+  price = 70000000;
+  now += 2000;
+  await engine.evaluate('price');
+  eq(engine.state.position, null);
+  // 일일 주문 횟수는 KST 자정 기준: 11/11 KST에 익절·매수·손절 3회
+  eq(engine.state.dailyCount.count, 3);
+});
+
+test('엔진(dip): 설정 탭 손절(-3%)이 켜져 있으면 먼저 작동해도 이상 없음', async () => {
+  const candles = DIP_CANDLES.map((c) => ({ ...c }));
+  let now = T0 + D + 10 * 1000;
+  let price = 90000000;
+  const account = { krw: 1000000, coins: {}, initialKrw: 1000000, createdAt: T0 };
+  const broker = new PaperBroker({ load: () => account, getPrice: () => price, now: () => now });
+  const logs = [];
+  const engine = new BotEngine({ broker, mode: 'paper', getCandles: async () => candles, getPrice: () => price, now: () => now });
+  engine.addEventListener('log', (e) => logs.push(e.detail));
+  engine.configure({ market: 'KRW-BTC', strategyId: 'dip', params: DIP_P, safety: { stopLoss: { on: true, pct: 3 } } });
+  await engine.start();
+  eq(engine.status, 'holding');
+  price = 87300000;
+  now += 2000;
+  await engine.evaluate('price');
+  eq(engine.state.position, null);
+  eq(logs.some((l) => l.kind === 'signal' && l.msg.startsWith('손절(')), true);
+  price = 80000000;
+  now += 2000;
+  await engine.evaluate('price');
+  eq(engine.state.position, null, '같은 날 재매수 없음');
+});
+
+test('백테스트(dip): 저가가 매수가격선 이하 → 매수가격선 체결, 고가가 익절선 이상 → 익절선 체결', () => {
+  const candles = [
+    { t: T0, o: 100, h: 101, l: 99, c: 100 },
+    { t: T0 + D, o: 100, h: 100, l: 88, c: 92 }, // 매수가격선 90 → 90에 매수
+    { t: T0 + 2 * D, o: 92, h: 100, l: 91, c: 98 }, // 익절선 99 → 99에 매도
+    { t: T0 + 3 * D, o: 98, h: 99, l: 97, c: 98 }
+  ];
+  const r = runBacktest(candles, 'dip', DIP_P, { feeRate: 0 });
+  eq(r.markers.map((m) => [m.side, m.price, m.t]), [['buy', 90, T0 + D], ['sell', 99, T0 + 2 * D]]);
+  eq(r.tradeCount, 1);
+  eq(r.winRate, 1);
+  eq(r.assumptions.length > 0, true);
+});
+
+test('백테스트(dip): 손절선 체결, 같은 캔들 익절·손절 동시면 손절 우선', () => {
+  const stop = [
+    { t: T0, o: 100, h: 100, l: 100, c: 100 },
+    { t: T0 + D, o: 100, h: 100, l: 90, c: 90 }, // 90 매수
+    { t: T0 + 2 * D, o: 90, h: 92, l: 80, c: 82 } // 손절선 81 → 81 매도
+  ];
+  const r1 = runBacktest(stop, 'dip', DIP_P, { feeRate: 0 });
+  eq(r1.markers.map((m) => [m.side, m.price]), [['buy', 90], ['sell', 81]]);
+  eq(r1.winRate, 0);
+  const both = [
+    { t: T0, o: 100, h: 100, l: 100, c: 100 },
+    { t: T0 + D, o: 100, h: 100, l: 90, c: 90 },
+    { t: T0 + 2 * D, o: 90, h: 100, l: 80, c: 95 } // 99·81 모두 닿음 → 손절
+  ];
+  const r2 = runBacktest(both, 'dip', DIP_P, { feeRate: 0 });
+  eq(r2.markers.map((m) => [m.side, m.price]), [['buy', 90], ['sell', 81]]);
+});
+
+test('백테스트(dip): 매도한 캔들에서는 재매수하지 않고, 매수한 캔들에서는 익절하지 않음', () => {
+  const candles = [
+    { t: T0, o: 100, h: 100, l: 100, c: 100 },
+    { t: T0 + D, o: 100, h: 100, l: 90, c: 91 }, // 90 매수 (같은 캔들 고가 100 ≥ 99지만 익절 안 함)
+    { t: T0 + 2 * D, o: 91, h: 91, l: 80, c: 81 }, // 81 손절, 매수가격선 81.9 이하지만 재매수 안 함
+    { t: T0 + 3 * D, o: 81, h: 81, l: 72, c: 75 } // 매수가격선 72.9 → 72.9 매수
+  ];
+  const r = runBacktest(candles, 'dip', DIP_P, { feeRate: 0 });
+  eq(r.markers.map((m) => [m.side, Math.round(m.price * 10) / 10]), [['buy', 90], ['sell', 81], ['buy', 72.9]]);
+  eq(r.trades[r.trades.length - 1].open, true);
 });
 
 // Node에서는 node:test로 등록

@@ -1,5 +1,5 @@
 // BotEngine: 스케줄, 안전장치, 신호→주문, 이벤트 발행. 브로커 종류를 모른다
-import { evaluate, validateParams, candleUnitOf, minCandlesFor, STRATEGIES } from './strategies.js';
+import { evaluate, validateParams, candleUnitOf, minCandlesFor, isPriceBased, STRATEGIES } from './strategies.js';
 import { closedOnly, nextCloseTime, dayStartUtc, kstDateKey, formatKst, DAY_MS } from './candles.js';
 import { calcOrderKrw, canSell, realizedPnl, floor8, FEE_RATE } from './market-rules.js';
 import { coinOf } from './brokers.js';
@@ -115,14 +115,15 @@ export class BotEngine extends EventTarget {
 
   scheduleNext() {
     const now = this.now();
-    this.nextEvalAt = this.config.strategyId === 'vb'
+    // dip/vb: 가격 틱마다 판정하고, 일봉 목록은 다음 일봉 시작(KST 09:00) 직후 갱신
+    this.nextEvalAt = isPriceBased(this.config.strategyId)
       ? dayStartUtc(now) + DAY_MS + VB_REFRESH_DELAY_MS
       : nextCloseTime(now, this.unit) + CANDLE_DELAY_MS;
   }
 
   async refreshCandles() {
     const all = await this.getCandles(this.unit, this.config.market);
-    this.candles = this.config.strategyId === 'vb' ? all : closedOnly(all, this.unit, this.now());
+    this.candles = isPriceBased(this.config.strategyId) ? all : closedOnly(all, this.unit, this.now());
     if (this.candles.length) this.state.lastCandleT = this.candles[this.candles.length - 1].t;
     return this.candles;
   }
@@ -148,7 +149,7 @@ export class BotEngine extends EventTarget {
       this.log('warn', '데이터 부족 — 캔들이 충분히 쌓이면 판정합니다');
     }
     // ma/rsi: 시작 시점의 마지막 마감 캔들은 판정 완료로 처리(이미 교차한 상태로 매수하지 않음)
-    if (this.config.strategyId !== 'vb' && this.candles.length) {
+    if (!isPriceBased(this.config.strategyId) && this.candles.length) {
       this.state.memo = { ...this.state.memo, lastT: this.candles[this.candles.length - 1].t };
     }
     this.rollDaily();
@@ -190,6 +191,7 @@ export class BotEngine extends EventTarget {
       }
       this.scheduleNext();
       await this.evaluate('candle');
+      // 다음날 자동 청산 타이머는 vb 전용(dip은 보유 기간 제한 없음 — 익절·손절선으로만 청산)
     } else if (this.config.strategyId === 'vb' && this.state.position && now >= dayStartUtc(this.state.position.enteredAt ?? 0) + DAY_MS) {
       await this.evaluate('timer');
     }
@@ -235,9 +237,8 @@ export class BotEngine extends EventTarget {
         await this.executeSell(risk, price);
         return null;
       }
-      // ma/rsi는 캔들 마감 시에만 전략 판정, 가격 틱에서는 안전장치만
-      const isVb = this.config.strategyId === 'vb';
-      if (!isVb && (trigger === 'price' || trigger === 'timer')) return null;
+      // ma/rsi는 캔들 마감 시에만 전략 판정, 가격 틱에서는 안전장치만(dip/vb는 가격 틱마다 판정)
+      if (!isPriceBased(this.config.strategyId) && (trigger === 'price' || trigger === 'timer')) return null;
       const result = evaluate(this.config.strategyId, {
         candles: this.candles,
         price,
