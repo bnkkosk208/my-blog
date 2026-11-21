@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>빠른 시작 안내 · 업비트 자동매매 봇</title>
+  <meta name="description" content="업비트 자동매매 봇을 내 PC에 설치해 소액으로 실거래까지 시험하는 한 장짜리 안내문">
+  <style>
+    :root {
+      --bg: #ffffff; --text: #1d2129; --muted: #5b6270; --line: #dfe3ea;
+      --soft: #f4f6fa; --accent: #2458d6; --warn: #9a5b00; --warn-bg: #fff6e5;
+      --danger: #c62828; --danger-bg: #fdecec; --ok: #1b7f4b;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #16181c; --text: #e8eaee; --muted: #a2a9b6; --line: #333842;
+        --soft: #20242b; --accent: #7aa2ff; --warn: #f0b04a; --warn-bg: #2b2414;
+        --danger: #ff6b6b; --danger-bg: #2d1a1a; --ok: #5fd39a;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #16181c; --text: #e8eaee; --muted: #a2a9b6; --line: #333842;
+      --soft: #20242b; --accent: #7aa2ff; --warn: #f0b04a; --warn-bg: #2b2414;
+      --danger: #ff6b6b; --danger-bg: #2d1a1a; --ok: #5fd39a;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans KR", sans-serif;
+      font-size: 13px; line-height: 1.5; word-break: keep-all; overflow-wrap: anywhere;
+    }
+    .page { max-width: 820px; margin: 0 auto; padding: 20px 16px 28px; }
+    header { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+      border-bottom: 2px solid var(--accent); padding-bottom: 6px; }
+    h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+    .sub { color: var(--muted); font-size: 12px; }
+    .lead { margin: 8px 0 10px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .card { border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; background: var(--bg); }
+    .card h2 { font-size: 14px; margin: 0 0 4px; display: flex; align-items: center; gap: 6px; }
+    .num { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%;
+      background: var(--accent); color: var(--bg); font-size: 12px; font-weight: 700; flex: none; }
+    ol, ul { margin: 0; padding-left: 18px; }
+    li { margin: 1px 0; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    code { background: var(--soft); padding: 0 3px; border-radius: 3px; }
+    pre { background: var(--soft); border-radius: 6px; padding: 6px 8px; margin: 4px 0; white-space: pre-wrap; line-height: 1.4; }
+    .note { color: var(--muted); font-size: 12px; }
+    .warn { background: var(--warn-bg); color: var(--text); border-left: 3px solid var(--warn); padding: 6px 9px; border-radius: 4px; margin: 6px 0 0; }
+    .danger { background: var(--danger-bg); border-left: 3px solid var(--danger); padding: 6px 9px; border-radius: 4px; }
+    .full { grid-column: 1 / -1; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { text-align: left; border-bottom: 1px solid var(--line); padding: 3px 4px; vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+    .ok { color: var(--ok); font-weight: 700; }
+    .bad { color: var(--danger); font-weight: 700; }
+    footer { margin-top: 10px; font-size: 11px; color: var(--muted); }
+    a { color: var(--accent); }
+    .print-btn { font: inherit; font-size: 12px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px;
+      background: var(--soft); color: var(--text); cursor: pointer; min-height: 32px; }
+    @media (max-width: 640px) {
+      .grid { grid-template-columns: 1fr; }
+      body { font-size: 14px; }
+    }
+    /* A4 한 장 인쇄: 항상 밝은 색, 여백 최소화 */
+    @page { size: A4; margin: 10mm; }
+    @media print {
+      :root { --bg: #fff; --text: #000; --muted: #444; --line: #bbb; --soft: #f2f2f2; --accent: #2458d6;
+        --warn: #9a5b00; --warn-bg: #fff6e5; --danger: #c62828; --danger-bg: #fdecec; --ok: #1b7f4b; }
+      body { font-size: 10.5px; line-height: 1.42; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      .page { max-width: none; padding: 0; }
+      .grid { grid-template-columns: 1fr 1fr; gap: 7px; }
+      .card { padding: 6px 8px; break-inside: avoid; }
+      h1 { font-size: 17px; }
+      .card h2 { font-size: 12px; }
+      pre, code, table { font-size: 10px; }
+      .print-btn, .print-only-hide { display: none; }
+      .note { font-size: 10px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <h1>업비트 자동매매 봇 · 빠른 시작</h1>
+      <span class="sub">내 PC에 설치해 소액 실거래까지<span class="print-only-hide"> · <button type="button" class="print-btn" onclick="window.print()">인쇄 / PDF 저장</button></span></span>
+    </header>
+
+    <p class="lead">
+      <strong>모의투자만 할 거라면 설치할 필요가 없어요.</strong> 블로그의 앱 화면에서 바로 쓰면 돼요.
+      아래는 <strong>내 업비트 계좌로 실거래</strong>할 때만 필요한 과정이에요. 내 API 키는 <strong>내 PC에만</strong> 저장되고, 누구에게도 전달되지 않아요.
+    </p>
+
+    <div class="grid">
+      <section class="card">
+        <h2><span class="num">1</span>프로그램 준비</h2>
+        <ol>
+          <li><a href="https://nodejs.org">nodejs.org</a>에서 <strong>LTS 버전</strong>을 설치해요.</li>
+          <li>GitHub 저장소에서 <strong>Code → Download ZIP</strong>을 누르고, 압축을 푼 다음 <code>apps/upbit-bot</code> 폴더만 꺼내 둬요.</li>
+        </ol>
+      </section>
+
+      <section class="card">
+        <h2><span class="num">2</span>업비트 API 키 발급</h2>
+        <ol>
+          <li>업비트 웹 → 마이페이지 → <strong>Open API 관리</strong>로 가요.</li>
+          <li>권한은 <span class="ok">✔ 자산조회</span> <span class="ok">✔ 주문하기</span>(주문조회가 따로 있으면 그것도)만 체크해요.</li>
+          <li><span class="bad">✘ 출금 권한은 절대 체크하지 마세요.</span></li>
+          <li>허용 IP에는 검색창에 “내 IP 확인”을 쳐서 나온 주소를 넣어요.</li>
+        </ol>
+      </section>
+
+      <section class="card">
+        <h2><span class="num">3</span>설정 파일(.env) 작성</h2>
+        <ol>
+          <li><code>server</code> 폴더의 실행 파일을 더블클릭해요. 윈도우는 <code>start-windows.bat</code>, 맥은 <code>start-mac.command</code>예요. 처음에는 <code>.env</code> 파일만 만들고 꺼져요.</li>
+          <li><code>.env</code>를 메모장으로 열어 아래처럼 고치고 저장해요.</li>
+        </ol>
+<pre>UPBIT_ACCESS_KEY=발급받은 액세스키
+UPBIT_SECRET_KEY=발급받은 시크릿키
+DRY_RUN=true          ← 처음엔 시험 모드
+MAX_ORDER_KRW=10000   ← 1회 최대 1만 원
+DAILY_MAX_ORDERS=3    ← 하루 매수 3회
+ALLOWED_MARKETS=KRW-BTC</pre>
+      </section>
+
+      <section class="card">
+        <h2><span class="num">4</span>시험 모드로 확인</h2>
+        <ol>
+          <li>실행 파일을 다시 더블클릭해요. 검은 창에 나오는 <strong>로컬 토큰</strong>을 적어 둬요. 잊어도 <code>.env</code>의 <code>LOCAL_TOKEN</code> 줄에 있어요.</li>
+          <li>브라우저로 <strong><code>http://127.0.0.1:8787/</code></strong>에 접속해요.</li>
+          <li><strong>실거래</strong> 버튼을 누르고 고지문 읽기 → 체크 4개 → 토큰과 “실거래 시작” 입력 순서로 진행해요.</li>
+          <li>위쪽 띠가 <strong>주황색(시험 모드)</strong>이고 <strong>내 계좌에 실제 잔고</strong>가 보이면 성공이에요.</li>
+        </ol>
+      </section>
+
+      <section class="card">
+        <h2><span class="num">5</span>소액 실거래 (1만 원)</h2>
+        <ol>
+          <li>검은 창을 닫아요. <code>.env</code>에서 <code>DRY_RUN=false</code>로 바꾸고 다시 실행해요. 위쪽 띠가 <strong>빨간색</strong>이 되면 실주문 모드예요.</li>
+          <li>투자 방식은 <strong>고정 · 10000원</strong>으로 넣어요.</li>
+          <li><strong>▶ 봇 시작</strong>을 눌러요. 체결은 로그 탭과 업비트 앱에서 확인해요.</li>
+          <li>바로 정리하려면 <strong>“보유분 시장가 매도”</strong>를 눌러요.</li>
+        </ol>
+        <p class="warn"><strong>왜 1만 원인가요?</strong> 업비트는 5,000원보다 작은 주문은 매도도 받지 않아요. 6,000원어치를 샀다가 손절선(−30%)에 닿으면 4,200원이 남아 팔 수 없어요.</p>
+      </section>
+
+      <section class="card">
+        <h2><span class="num">6</span>기본 전략: 조정 매수</h2>
+        <table>
+          <tr><th>매수</th><td>전일 종가(업비트 일봉, 한국 시간 오전 9시 기준)보다 <strong>10%</strong> 떨어지면 사요. 하루에 한 번만 사요.</td></tr>
+          <tr><th>익절</th><td>산 가격보다 <strong>+5%</strong> 오르면 팔아요.</td></tr>
+          <tr><th>손절</th><td>산 가격보다 <strong>−30%</strong> 떨어지면 팔아요. 한 번 손절하면 익절 약 6번분의 수익을 잃어요.</td></tr>
+        </table>
+        <p class="note">큰 코인은 하루에 10% 떨어지는 날이 드물어서 몇 주씩 매수가 없을 수 있어요. 주문 흐름을 바로 시험하려면 매수 하락폭을 잠시 1%로 낮추고, 시험이 끝나면 10으로 되돌려요.</p>
+      </section>
+
+      <section class="card full">
+        <h2><span class="num">!</span>자주 생기는 문제</h2>
+        <table>
+          <tr><th>허용되지 않은 IP</th><td>PC의 공인 IP가 바뀌었어요. “내 IP 확인”으로 확인하고 업비트에 다시 등록해요.</td></tr>
+          <tr><th>포트 8787 사용 중</th><td>다른 검은 창에서 서버가 이미 켜져 있어요. 그 창을 닫거나 <code>.env</code>의 <code>PORT</code>를 바꿔요.</td></tr>
+          <tr><th>실거래 버튼이 안 눌려요</th><td>블로그 주소가 아니라 <code>http://127.0.0.1:8787/</code>에서 열어야 해요.</td></tr>
+          <tr><th>시세 연결 실패</th><td>칩 아래에 나오는 원인을 확인하고, 칩을 누르면 바로 다시 연결해요.</td></tr>
+          <tr><th>봇이 멈췄어요</th><td><strong>브라우저 탭과 검은 창을 둘 다 켜 둬야</strong> 봇이 동작해요.</td></tr>
+        </table>
+      </section>
+
+      <section class="card full danger">
+        <strong>꼭 지켜 주세요.</strong> API 키와 <code>.env</code> 파일은 <strong>누구에게도 보내지 마세요.</strong> 프로그램을 나눠 준 사람도 마찬가지예요.
+        키가 유출된 것 같으면 업비트에서 그 키를 바로 삭제하세요.
+        이 프로그램은 본인 계좌·본인 판단·본인 책임으로 쓰는 학습용 도구이고, 투자 권유가 아니에요. 수익을 보장하지 않으며 원금을 잃을 수 있어요.
+        배포자는 투자 손실과 키 관리에 책임지지 않아요. 업비트(두나무)와 관련 없는 비공식 도구예요.
+      </section>
+    </div>
+
+    <footer>
+      자세한 설치 안내는 <code>server/README.md</code>, 면책 고지 전문은 <code>DISCLAIMER.md</code>에 있어요. 앱 버전 v1.1.0 기준.
+    </footer>
+  </div>
+</body>
+</html>
